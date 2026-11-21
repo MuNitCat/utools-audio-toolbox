@@ -38,7 +38,13 @@ const HOST_ITEM = {
   current: false
 }
 
-/** 老版本 preload 没有 scanBinaries 时，至少把「当前在用的」和「内置」列出来 */
+/**
+ * 老版本 preload 没有 scanBinaries 时的兜底列表。
+ * 只能列出「当前正在用的系统 ffmpeg」，其余候选扫不到就扫不到，
+ * 界面会同时提示 preload 未更新。
+ * @param {object} info getBinaries() 的返回值
+ * @returns {object[]} 可渲染的列表项
+ */
 function fallbackItems(info) {
   const list = []
   const ff = info && info.ffmpeg
@@ -57,6 +63,12 @@ function fallbackItems(info) {
   return list
 }
 
+/**
+ * 保证列表里永远有「uTools 内置」这一项，否则用户没有可回退的选择。
+ * @param {object[]} list 后端返回的候选项
+ * @param {boolean} isCurrent 内置项是否就是当前使用中的
+ * @returns {object[]} 补全后的列表（不改原数组）
+ */
 function withHost(list, isCurrent) {
   const arr = Array.isArray(list) ? [...list] : []
   if (!arr.some((i) => i.source === 'host')) arr.push({ ...HOST_ITEM, current: Boolean(isCurrent) })
@@ -69,6 +81,12 @@ const PKG_CMD = {
   win32: 'winget install Gyan.FFmpeg'
 }
 
+/**
+ * FFmpeg 设置弹窗：扫描/切换/手动添加可执行路径。
+ * 所有动作都以 preload 的能力检测为前提（preload 不热更新，旧版本可能没有这些方法）。
+ * @param {{open: boolean, onClose: () => void, onChange?: (info: object) => void}} props
+ * @returns {JSX.Element|null} 关闭时返回 null
+ */
 export default function FfmpegModal({ open, onClose, onChange }) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   const [summary, setSummary] = useState(null)
@@ -106,6 +124,7 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     if (!api) return
     setBusy(true)
     try {
+      // getBinaries 只回「当前在用的」，候选列表靠 scanBinaries 单独扫
       const info = api.getBinaries()
       setSummary(info)
       applyScan(info)

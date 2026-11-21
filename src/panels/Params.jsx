@@ -1,6 +1,12 @@
+import Select from '../components/Select.jsx'
+import Tip from '../components/Tip.jsx'
 import { useStore } from '../core/store.js'
 
-/** select 字段的呈现方式：少量短选项用分段控件，稍多用卡片网格，否则下拉 */
+/**
+ * 决定 select 字段用哪种控件：少量短选项用分段按钮，稍多用卡片网格，其余走自绘下拉。
+ * @param {object} field 字段定义
+ * @returns {string} 控件类型标识（segment / grid / dropdown / number / file / dir / text …）
+ */
 function kindOf(field) {
   if (field.ui) return field.ui
   if (field.type !== 'select') return field.type
@@ -11,7 +17,11 @@ function kindOf(field) {
   return 'dropdown'
 }
 
-/** 卡片网格的列数：短标签且数量多时铺 4 列 */
+/**
+ * 卡片网格的列数：标签短且数量多时铺 4 列，3 个短标签铺 3 列，其余 2 列。
+ * @param {object[]} opts 选项列表
+ * @returns {number} 列数
+ */
 function gridCols(opts) {
   const maxLen = opts.reduce((m, o) => Math.max(m, String(o.label).length), 0)
   if (opts.length >= 5 && maxLen <= 5) return 4
@@ -19,6 +29,12 @@ function gridCols(opts) {
   return 2
 }
 
+/**
+ * 单个字段的控件渲染。数字字段的步进按钮按 step 的小数位取整，
+ * 否则 0.05 这种步长会被四舍五入卡住。
+ * @param {{field: object, value: any, onChange: (key: string, value: any) => void}} props
+ * @returns {JSX.Element} 控件节点
+ */
 function Control({ field, value, onChange }) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   const kind = kindOf(field)
@@ -43,16 +59,25 @@ function Control({ field, value, onChange }) {
     }
     return (
       <div className={`option-grid cols-${gridCols(opts)}`}>
-        {opts.map((o) => (
-          <button
-            key={String(o.value)}
-            className={`option-card${String(value ?? '') === String(o.value) ? ' active' : ''}`}
-            onClick={() => onChange(field.key, o.value)}
-            title={o.title || o.label}
-          >
-            {o.label}
-          </button>
-        ))}
+        {opts.map((o) => {
+          const card = (
+            <button
+              key={String(o.value)}
+              className={`option-card${String(value ?? '') === String(o.value) ? ' active' : ''}`}
+              onClick={() => onChange(field.key, o.value)}
+              // 有自绘气泡时不再挂原生 title，避免两套提示同时冒出来
+              title={o.tip ? '' : o.title || o.label}
+            >
+              {o.label}
+            </button>
+          )
+          if (!o.tip) return card
+          return (
+            <Tip key={String(o.value)} tip={o.tip}>
+              {card}
+            </Tip>
+          )
+        })}
       </div>
     )
   }
@@ -60,13 +85,11 @@ function Control({ field, value, onChange }) {
   switch (field.type) {
     case 'select':
       return (
-        <select className="select" value={value ?? ''} onChange={(e) => onChange(field.key, e.target.value)}>
-          {(field.options || []).map((o) => (
-            <option key={String(o.value)} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <Select
+          value={value ?? ''}
+          options={field.options || []}
+          onChange={(v) => onChange(field.key, v)}
+        />
       )
     case 'number': {
       const min = field.min !== undefined ? Number(field.min) : -Infinity
@@ -75,10 +98,13 @@ function Control({ field, value, onChange }) {
       const clamp = (n) => Math.min(max, Math.max(min, n))
       const current = value === '' || value === null || value === undefined ? '' : Number(value)
 
+      // 步长可能是小数（速度 0.05），按整数四舍五入会让加减卡在原地
+      const decimals = (String(step).split('.')[1] || '').length
+      const roundTo = (n) => Number(n.toFixed(decimals))
+
       const bump = (delta) => {
         const base = Number.isFinite(current) && current !== '' ? current : Number.isFinite(min) ? min : 0
-        const next = clamp(Math.round(base + delta))
-        onChange(field.key, Number(next.toFixed(4)))
+        onChange(field.key, roundTo(clamp(roundTo(base + delta))))
       }
 
       const isAuto = value === 'auto'
@@ -181,9 +207,17 @@ function Control({ field, value, onChange }) {
   }
 }
 
-export default function Params({ feature, params, onChange }) {
+/**
+ * 参数面板：完全由功能定义驱动，不写死在组件里。
+ * @param {{feature: object, params: object, onChange: (key: string, value: any) => void, files?: object[]}} props
+ *   files 会透传给 hint 函数（ctx.files），用于「按已载入文件算文案」的提示
+ * @returns {JSX.Element|null} 没有功能时返回 null
+ */
+export default function Params({ feature, params, onChange, files = [] }) {
   useStore((s) => s.featureId)
   const artists = useStore((s) => s.artistHistory)
+  /** hint 函数拿到的上下文：需要按已载入文件算文案时用（例如音轨数量） */
+  const ctx = { files }
   if (!feature) return null
 
   const visible = feature.fields.filter((f) => (typeof f.showIf === 'function' ? f.showIf(params) : true))
@@ -207,16 +241,21 @@ export default function Params({ feature, params, onChange }) {
           )
         }
         if (field.type === 'switch') {
+          // 开关也能带 hint（提示放在开关行下方）
+          const hint = typeof field.hint === 'function' ? field.hint(params, ctx) : field.hint
           return (
-            <div className="field-row" key={field.key}>
-              <label>{field.label}</label>
-              <label className="switch">
-                <input type="checkbox" checked={Boolean(params[field.key])} onChange={(e) => onChange(field.key, e.target.checked)} />
-              </label>
+            <div className="field" key={field.key}>
+              <div className="field-row">
+                <label>{field.label}</label>
+                <label className="switch">
+                  <input type="checkbox" checked={Boolean(params[field.key])} onChange={(e) => onChange(field.key, e.target.checked)} />
+                </label>
+              </div>
+              {hint ? <div className="field-hint">{hint}</div> : null}
             </div>
           )
         }
-        const hint = typeof field.hint === 'function' ? field.hint(params) : field.hint
+        const hint = typeof field.hint === 'function' ? field.hint(params, ctx) : field.hint
         return (
           <div className="field" key={field.key}>
             <label>{field.label}</label>

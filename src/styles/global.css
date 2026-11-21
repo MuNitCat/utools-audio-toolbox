@@ -284,6 +284,12 @@ select {
   gap: 10px;
 }
 
+/* 弹窗整行很宽时，开关贴着标签放，别被 space-between 推到最右边 */
+.field-row.tight {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
 .stepper {
   display: flex;
   align-items: center;
@@ -296,14 +302,15 @@ select {
 }
 
 .step-btn {
-  width: 30px;
+  /* 参数栏宽 320px，减去 padding 与两个 gap 后输入框仍有 ~200px，够放三位数 */
+  width: 40px;
   height: 32px;
   flex: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-2);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1;
   display: flex;
   align-items: center;
@@ -397,8 +404,7 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--text-2);
 }
 
-.input,
-.select {
+.input {
   width: 100%;
   height: 32px;
   padding: 0 9px;
@@ -409,13 +415,142 @@ input[type='number']::-webkit-inner-spin-button {
   font-size: 12.5px;
 }
 
-.input:focus,
-.select:focus {
+.input:focus {
   border-color: var(--accent);
 }
 
 .input::placeholder {
   color: var(--text-3);
+}
+
+/* ------------------------ 浮动气泡（components/Tip.jsx） ------------------------ */
+/* 与应用设置图标的 tip-host 同一套配色，但走 portal + fixed，不会被 .panel 裁掉 */
+.tip-anchor {
+  display: flex;
+  min-width: 0;
+}
+
+.tip-anchor > .option-card {
+  flex: 1;
+}
+
+.tip-bubble {
+  position: fixed;
+  z-index: 450;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: rgba(18, 20, 24, 0.94);
+  color: #fff;
+  font-size: 11.5px;
+  line-height: 1.45;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+/* ------------------------------ 自绘下拉（components/Select.jsx） ------------------------------ */
+/* 不用原生 select：uTools 里它的弹层是系统白底，深色主题下跟界面割裂，宽度也不跟触发器对齐 */
+.sel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sel:hover {
+  border-color: var(--border-strong);
+}
+
+.sel.open,
+.sel:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.sel:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sel-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sel-label.empty {
+  color: var(--text-3);
+}
+
+.sel-caret {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+
+.sel.open .sel-caret {
+  transform: rotate(180deg);
+}
+
+.sel-menu {
+  position: fixed;
+  z-index: 500;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+:root[data-theme='dark'] .sel-menu {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5);
+}
+
+.sel-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sel-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sel-option.active {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.sel-option.current {
+  color: var(--accent);
+}
+
+.sel-option svg {
+  flex: none;
 }
 
 /* 分段控件（两个大卡片） */
@@ -1179,7 +1314,15 @@ body.modal-open .toast {
 }
 
 .output-modal {
-  width: 420px;
+  width: 520px;
+}
+
+/* 「指定目录」那行的选择按钮：与 32px 的 path-box 等高，宽度也给够 */
+.btn-ghost.btn-pick {
+  height: 32px;
+  padding: 0 16px;
+  min-width: 76px;
+  flex: none;
 }
 
 .modal-head {
@@ -1225,6 +1368,89 @@ body.modal-open .toast {
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+
+/* 应用设置：分隔小标题（侧边栏显示） */
+.modal-sub {
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.pick-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pick-group-title {
+  font-size: 11px;
+  color: var(--text-3);
+  padding-left: 2px;
+}
+
+.pick-grid {
+  display: grid;
+  /* 弹窗 420px − 28px padding = 392px，减去两处 8px 间距后每列 ~125px，够放 5 个汉字 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pick-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-row:hover {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.pick-row input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+}
+
+.pick-row input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.pick-row input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(42deg);
 }
 
 .ff-section-title {

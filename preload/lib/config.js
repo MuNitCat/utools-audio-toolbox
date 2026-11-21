@@ -7,8 +7,7 @@ const DEFAULTS = {
   outputDir: '',
   suffix: '',
   overwrite: false,
-  concurrency: 1,
-  threads: 0,
+  concurrency: 2,
   lastFeature: 'convert',
   lastGroup: 'A',
   params: {},
@@ -23,6 +22,12 @@ const DEFAULTS = {
   ffmpegExtras: [],
   /** 最近用过的艺术家，最多 5 个，最新的在前 */
   artistHistory: [],
+  /**
+   * 侧边栏里被取消勾选的功能 id（只是不显示，功能本身仍可用）。
+   * 默认收起频谱/波形图；常驻项（格式转换、视频提取音频）见
+   * src/core/features.js 的 PINNED_FEATURE_IDS，不会被写进这里。
+   */
+  hiddenFeatures: ['visualize'],
   theme: 'light'
 }
 

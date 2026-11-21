@@ -117,7 +117,7 @@
       }
     },
     "audio_extract": {
-      "description": "从视频文件（mp4/mkv/mov/webm/avi 等）里提取音轨，画面与字幕全部丢弃，只保留第一条音频流。默认重编码，copy=true 时直接复制音轨（要求源音频编码与目标容器兼容，如 mp4→m4a、mkv(opus)→opus）。",
+      "description": "从视频文件（mp4/mkv/mov/webm/avi 等）里提取音轨，画面与字幕全部丢弃。trackMode=first 只取第一条（默认），all 每条音轨各导一个文件（命名 原名_1/2…，不加额外后缀），mix 把所有音轨混合成一条（走 amix，需要重编码）。先调 audio_info 看 audioStreams 判断有几条轨。",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -128,12 +128,17 @@
             "minItems": 1,
             "description": "视频文件绝对路径列表"
           },
+          "trackMode": {
+            "type": "string",
+            "enum": ["first", "all", "mix"],
+            "description": "音轨处理：first 只取第一条（默认）/ all 每条各导一个文件 / mix 混合成一条"
+          },
           "format": {
             "type": "string",
             "enum": ["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "alac"],
             "description": "目标音频格式，默认 m4a"
           },
-          "bitrate": { "type": "number", "minimum": 32, "maximum": 512, "description": "有损格式码率 kbps，如 192" },
+          "bitrate": { "type": "number", "minimum": 32, "maximum": 512, "description": "有损格式码率 kbps；不传则沿用源音轨码率（夹在 64–320）" },
           "quality": { "type": "string", "description": "MP3 VBR 质量 0-9（0 最高），设置后忽略 bitrate" },
           "sampleRate": {
             "type": "number",
@@ -144,7 +149,7 @@
           "copy": { "type": "boolean", "description": "true 表示直接复制音轨（不重编码，最快；源编码与容器不兼容时会失败）" },
           "outputDir": { "type": "string", "description": "输出目录绝对路径；不传则与原文件同目录" },
           "overwrite": { "type": "boolean", "description": "是否允许覆盖同名文件，默认 false" },
-          "suffix": { "type": "string", "description": "输出文件名后缀，例如 _audio" }
+          "suffix": { "type": "string", "description": "输出文件名后缀，留空表示不改名，例如 _converted" }
         },
         "required": ["inputPaths"]
       }

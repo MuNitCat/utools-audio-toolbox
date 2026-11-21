@@ -7,14 +7,20 @@ import OutputModal from '../panels/OutputModal.jsx'
 import Viewer from '../panels/Viewer.jsx'
 import FfmpegModal from '../panels/FfmpegModal.jsx'
 import Icon from '../components/Icon.jsx'
-import { defaultParams, getFeature } from '../core/features.js'
+import { DEFAULT_HIDDEN_FEATURES, FEATURES, defaultParams, getFeature, isPinnedFeature } from '../core/features.js'
 import { resolveOutputDir } from '../core/output.js'
 import { tagsToParams } from '../core/tags.js'
 import { rememberArtist } from '../core/history.js'
-import { clearFinished, enqueue } from '../core/queue.js'
-import { toast, useStore } from '../core/store.js'
+import { clearFinished, enqueue, setConcurrency } from '../core/queue.js'
+import { setState, toast, useStore } from '../core/store.js'
 import { formatShort } from '../core/format.js'
 
+/**
+ * 主界面：三栏骨架 + 底部工具栏。
+ * 参数状态放在这一层（而不是每个功能里），切功能时按新功能的默认值重建；
+ * visualize 是例外，整块交给 Viewer 渲染。
+ * @returns {JSX.Element}
+ */
 export default function MainPage() {
   const featureId = useStore((s) => s.featureId)
   const files = useStore((s) => s.files)
@@ -24,7 +30,15 @@ export default function MainPage() {
 
   const feature = getFeature(featureId)
   const [params, setParams] = useState(() => defaultParams(getFeature('convert')))
-  const [settings, setSettings] = useState({ mode: 'sibling', dir: '', overwrite: false, threads: 0 })
+  const [settings, setSettings] = useState({
+    mode: 'sibling',
+    dir: '',
+    overwrite: false,
+    /** 同时跑几个任务（1–4），落到队列的 setConcurrency */
+    parallel: 2,
+    /** 侧栏里被取消勾选的功能 id */
+    hiddenFeatures: DEFAULT_HIDDEN_FEATURES
+  })
   const [showOutput, setShowOutput] = useState(false)
   const [binInfo, setBinInfo] = useState(null)
   const [showFfmpeg, setShowFfmpeg] = useState(false)
@@ -65,14 +79,31 @@ export default function MainPage() {
 
   useEffect(() => {
     if (!config) return
+    // 配置是异步回来的：回来后再覆盖一次本地设置，保证「上次用的输出位置」能续上
     setSettings((prev) => ({
       ...prev,
       mode: config.outputMode || 'sibling',
       dir: config.outputDir || '',
       overwrite: Boolean(config.overwrite),
-      threads: config.threads || 0
+      parallel: Math.min(4, Math.max(1, Number(config.concurrency) || 2)),
+      hiddenFeatures: (Array.isArray(config.hiddenFeatures) ? config.hiddenFeatures : DEFAULT_HIDDEN_FEATURES).filter(
+        (id) => !isPinnedFeature(id)
+      )
     }))
   }, [config])
+
+  // 并行数变化时同步给队列；调大且还有排队任务时，队列会立刻补槽
+  useEffect(() => {
+    setConcurrency(settings.parallel)
+  }, [settings.parallel])
+
+  // 侧栏里把当前功能取消勾选后，自动跳到第一个还可见的功能
+  useEffect(() => {
+    const hidden = new Set(settings.hiddenFeatures)
+    if (!hidden.has(featureId)) return
+    const next = FEATURES.find((f) => !f.hidden && !hidden.has(f.id))
+    if (next) setState({ featureId: next.id })
+  }, [featureId, settings.hiddenFeatures])
 
   const busy = tasks.some((t) => t.status === 'running' || t.status === 'pending')
   const isViewer = featureId === 'visualize'
@@ -87,7 +118,13 @@ export default function MainPage() {
     const api = window.audioServices
     if (api) {
       try {
-        api.setConfig({ outputMode: next.mode, outputDir: next.dir, overwrite: next.overwrite, threads: next.threads })
+        api.setConfig({
+          outputMode: next.mode,
+          outputDir: next.dir,
+          overwrite: next.overwrite,
+          concurrency: next.parallel,
+          hiddenFeatures: next.hiddenFeatures
+        })
       } catch (_) {}
     }
   }
@@ -110,14 +147,14 @@ export default function MainPage() {
       return
     }
     try {
+      // 输出目录在这里才解析：设置里存的是模式，不是绝对路径
       enqueue({
         featureId,
         files: usable,
         params: {
           ...params,
           outputDir: resolveOutputDir(settings),
-          overwrite: settings.overwrite,
-          threadCount: settings.threads
+          overwrite: settings.overwrite
         }
       })
       // 执行成功才记，避免误触也写进历史
@@ -129,7 +166,6 @@ export default function MainPage() {
           outputMode: settings.mode,
           outputDir: settings.dir,
           overwrite: settings.overwrite,
-          threads: settings.threads,
           lastFeature: featureId
         })
       }
@@ -153,7 +189,7 @@ export default function MainPage() {
       </div>
 
       <div className="content">
-        <Sidebar />
+        <Sidebar hiddenFeatures={settings.hiddenFeatures} />
 
         <div className="right">
           {isViewer ? (
@@ -163,7 +199,7 @@ export default function MainPage() {
               <div className="work">
                 <div className="panel">
                   <div className="section-title">{feature ? feature.name : '参数'}</div>
-                  <Params feature={feature} params={params} onChange={updateParam} />
+                  <Params feature={feature} params={params} onChange={updateParam} files={usable} />
                 </div>
 
                 <div className="stage">
@@ -175,8 +211,8 @@ export default function MainPage() {
               <div className="footer">
                 <button
                   className={`icon-btn tip-host tip-left${showOutput ? ' on' : ''}`}
-                  data-tip="输出设置"
-                  aria-label="输出设置"
+                  data-tip="应用设置"
+                  aria-label="应用设置"
                   onClick={() => setShowOutput(true)}
                 >
                   <Icon name="gear" />

@@ -10,10 +10,17 @@ const THEME_OPTIONS = [
   { value: 'dark', icon: 'moon', label: '黑夜' }
 ]
 
-export default function Sidebar() {
+/**
+ * 左侧功能导航。分组之间只画一条分隔线（靠 group 变化判断），
+ * 所以 FEATURES 必须按分组连续排列，否则会出现重复的线。
+ * @param {{hiddenFeatures?: string[]}} props 在「应用设置」里被取消勾选的功能 id
+ * @returns {JSX.Element}
+ */
+export default function Sidebar({ hiddenFeatures = [] }) {
   const featureId = useStore((s) => s.featureId)
   const theme = useStore((s) => s.theme)
-  const list = FEATURES.filter((f) => !f.hidden)
+  const hidden = new Set(hiddenFeatures || [])
+  const list = FEATURES.filter((f) => !f.hidden && !hidden.has(f.id))
   let lastGroup = null
 
   return (

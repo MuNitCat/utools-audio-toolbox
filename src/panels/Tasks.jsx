@@ -1,6 +1,7 @@
 import { cancel, clearFinished, retry } from '../core/queue.js'
 import { useStore } from '../core/store.js'
 import { formatClock } from '../core/format.js'
+import Icon from '../components/Icon.jsx'
 
 const STATE_TEXT = {
   pending: '等待中',
@@ -11,6 +12,12 @@ const STATE_TEXT = {
   skipped: '跳过'
 }
 
+/**
+ * 单条任务：跑动中显示百分比、速度、剩余时间；结束后显示产出文件名。
+ * 「打开」按钮只对已完成的输出生效，避免指向半成品。
+ * @param {{task: object}} props 任务快照
+ * @returns {JSX.Element}
+ */
 function TaskRow({ task }) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   const name = task.input.split('/').pop()
@@ -34,8 +41,13 @@ function TaskRow({ task }) {
           </button>
         )}
         {task.status === 'done' && task.output && (
-          <button className="link-btn" onClick={() => api && api.openInFolder(task.output)}>
-            打开
+          <button
+            className="icon-btn task-open"
+            title="打开所在文件夹"
+            aria-label="打开所在文件夹"
+            onClick={() => api && api.openInFolder(task.output)}
+          >
+            <Icon name="folder" size={18} />
           </button>
         )}
         <span className={`state ${task.status}`}>
@@ -62,6 +74,10 @@ function TaskRow({ task }) {
   )
 }
 
+/**
+ * 任务区：只渲染最近 30 条，避免长时间批量处理后 DOM 过大。
+ * @returns {JSX.Element|null} 没有任务时返回 null
+ */
 export default function Tasks() {
   const tasks = useStore((s) => s.tasks)
   if (!tasks.length) return null

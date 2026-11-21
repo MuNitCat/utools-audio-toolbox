@@ -6,6 +6,7 @@ import { toast, useStore } from '../core/store.js'
 import { formatBytes, formatClock } from '../core/format.js'
 import { resolveOutputDir } from '../core/output.js'
 import Icon from '../components/Icon.jsx'
+import Select from '../components/Select.jsx'
 
 const TIPS = {
   spectrum: {
@@ -28,6 +29,11 @@ const TIPS = {
   }
 }
 
+/**
+ * 频谱/波形查看器：整幅替换三栏主体，不分左右栏。
+ * 即时预览由 quickPreview 渲染（临时文件），「生成完整图」才真正落盘。
+ * @returns {JSX.Element}
+ */
 export default function Viewer() {
   const files = useStore((s) => s.files)
   const preview = useStore((s) => s.preview)
@@ -53,6 +59,7 @@ export default function Viewer() {
     setLoading(true)
     setError('')
     try {
+      // 预览失败只影响这一栏，不要冒泡成全局 toast
       await quickPreview({ path, info: (usable.find((f) => f.path === path) || {}).info }, k)
     } catch (err) {
       setError((err && err.message) || '预览失败')
@@ -71,6 +78,7 @@ export default function Viewer() {
 
   const onDrop = async (e) => {
     e.preventDefault()
+    // 这一栏没有 Stage 的拖放区，自己把 File 还原成路径再入库
     const api = window.audioServices
     const paths = []
     for (const file of Array.from((e.dataTransfer && e.dataTransfer.files) || [])) {
@@ -85,6 +93,7 @@ export default function Viewer() {
     const api2 = typeof window !== 'undefined' ? window.audioServices : null
     const cfg = api2 && api2.getConfig ? api2.getConfig() : {}
     try {
+      // 完整图走正常队列：会真的产出 PNG 到输出目录，失败要能看见
       enqueue({
         featureId: 'visualize',
         files: [current],
@@ -108,19 +117,17 @@ export default function Viewer() {
   return (
     <div className="viewer" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className="viewer-bar">
-        <select
-          className="select viewer-file"
+        <Select
+          className="viewer-file"
           value={currentPath}
-          onChange={(e) => setPicked(e.target.value)}
+          onChange={setPicked}
           disabled={!usable.length}
-        >
-          {usable.length === 0 && <option value="">（还没有文件）</option>}
-          {usable.map((f) => (
-            <option key={f.path} value={f.path}>
-              {(f.info && f.info.name) || f.path.split('/').pop()}
-            </option>
-          ))}
-        </select>
+          placeholder="（还没有文件）"
+          options={usable.map((f) => ({
+            value: f.path,
+            label: (f.info && f.info.name) || f.path.split('/').pop()
+          }))}
+        />
 
         <div className="segment viewer-seg">
           <button className={kind === 'spectrum' ? 'active' : ''} onClick={() => setKind('spectrum')}>

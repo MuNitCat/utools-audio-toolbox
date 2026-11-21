@@ -8,8 +8,10 @@ import { enqueue, waitFor } from './queue.js'
 import { getState, subscribe } from './store.js'
 import { TOOL_NAMES } from './tool-names.js'
 
+/** preload 桥接对象（MCP 只在 uTools 内运行，拿不到就直接报错） */
 const svc = () => window.audioServices
 
+/* schema 片段速记：只为了少写 type/description 的样板 */
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra })
 const num = (description, extra = {}) => ({ type: 'number', description, ...extra })
 const bool = (description) => ({ type: 'boolean', description })
@@ -26,12 +28,25 @@ const OUTPUT_PROPS = {
   suffix: str('输出文件名后缀，例如 _norm')
 }
 
+/**
+ * 包一层 JSON Schema 的壳，省掉重复的 type/additionalProperties。
+ * @param {Record<string, object>} properties 字段定义
+ * @param {string[]} [required] 必填字段
+ * @returns {object} 完整 inputSchema
+ */
 function schema(properties, required = []) {
   return { type: 'object', additionalProperties: false, properties, required }
 }
 
 /* ------------------------------ 执行辅助 ------------------------------ */
 
+/**
+ * 探测输入文件，组装成 buildTasks 需要的 files 结构。
+ * 只要有一个文件可读就继续（其余带 error 一起进任务，最后单独报）。
+ * @param {string|string[]} inputPaths 一个或多个绝对路径
+ * @returns {Promise<{path: string, info: object, error: string}[]>} 与入参顺序对齐
+ * @throws {Error} preload 未就绪、路径为空或全部文件不可读时抛出
+ */
 async function prepare(inputPaths) {
   const api = svc()
   if (!api) throw new Error('audioServices 未就绪（请在 uTools 内运行）')
@@ -47,6 +62,13 @@ async function prepare(inputPaths) {
   return list.map((path, i) => ({ path, info: infos[i], error: infos[i].ok ? '' : infos[i].error }))
 }
 
+/**
+ * 把队列进度转成 MCP 的 sendProgress。
+ * 只有百分比整数变化才上报，避免 10Hz 的进度把 Agent 刷爆。
+ * @param {object[]} tasks 本次任务快照
+ * @param {object} ctx MCP 调用上下文（可能没有 sendProgress）
+ * @returns {() => void} 取消订阅函数
+ */
 function monitor(tasks, ctx) {
   if (!ctx || typeof ctx.sendProgress !== 'function') return () => {}
   const ids = new Set(tasks.map((t) => t.id))
@@ -70,6 +92,11 @@ function monitor(tasks, ctx) {
   return unsubscribe
 }
 
+/**
+ * 从 store 里取任务终态，整理成对 Agent 友好的结果。
+ * @param {object[]} tasks 本次任务快照
+ * @returns {{results: object[], succeeded: number, failed: number, total: number}}
+ */
 function collect(tasks) {
   const state = getState()
   const results = tasks.map((origin) => {
@@ -87,6 +114,13 @@ function collect(tasks) {
   return { results, succeeded, failed: results.length - succeeded, total: results.length }
 }
 
+/**
+ * MCP 的统一执行入口：和 GUI 共用 features.build()，只是不经过 React。
+ * 单个文件失败不抛错，只有全部失败才抛（让 Agent 拿到真正的原因）。
+ * @param {{featureId: string, params?: object, inputPaths: string|string[], ctx?: object}} job 任务描述
+ * @returns {Promise<{results: object[], succeeded: number, failed: number, total: number}>}
+ * @throws {Error} 未知功能、preload 未就绪或全部文件处理失败时抛出
+ */
 async function runJob({ featureId, params, inputPaths, ctx }) {
   const feature = getFeature(featureId)
   if (!feature) throw new Error(`未知功能：${featureId}`)
@@ -112,6 +146,10 @@ async function runJob({ featureId, params, inputPaths, ctx }) {
 
 /* ------------------------------ Handler ------------------------------ */
 
+/**
+ * 工具实现表。每个 handler 只做「schema 字段 → 功能参数」的搬运，
+ * 真正的执行一律走 runJob，保证 GUI 与 MCP 产出一致。
+ */
 const handlers = {
   async audio_info({ inputPaths }) {
     const api = svc()
@@ -135,6 +173,7 @@ const handlers = {
         bitsPerSample: i.bitsPerSample,
         hasCover: i.hasCover,
         hasVideo: Boolean(i.hasVideo),
+        audioStreams: i.audioStreams || 1,
         sizeBytes: i.size,
         tags: i.tags || {}
       }))
@@ -166,6 +205,7 @@ const handlers = {
       inputPaths: p.inputPaths,
       ctx: p.__ctx,
       params: {
+        trackMode: p.trackMode || 'first',
         format: p.format || 'm4a',
         bitrate: p.bitrate,
         quality: p.quality,
@@ -372,6 +412,10 @@ const handlers = {
 
 /* ------------------------------ Schema ------------------------------ */
 
+/**
+ * 工具定义（描述 + inputSchema）。plugin.json 里的同名工具必须与这里保持一致——
+ * 构建脚本只校验「名字对得上」，schema 的文案/枚举要人工同步。
+ */
 export const TOOL_DEFS = {
   audio_info: {
     description:
@@ -402,12 +446,15 @@ export const TOOL_DEFS = {
 
   audio_extract: {
     description:
-      '从视频文件（mp4/mkv/mov/webm/avi 等）里提取音轨，画面与字幕全部丢弃，只保留第一条音频流。默认重编码，copy=true 时直接复制音轨（要求源音频编码与目标容器兼容，如 mp4→m4a、mkv(opus)→opus）。',
+      '从视频文件（mp4/mkv/mov/webm/avi 等）里提取音轨，画面与字幕全部丢弃。trackMode=first 只取第一条（默认），all 每条音轨各导一个文件（命名 原名_1/2…，不加额外后缀），mix 把所有音轨混合成一条（走 amix，需要重编码）。先调 audio_info 看 audioStreams 判断有几条轨。',
     inputSchema: schema(
       {
         inputPaths: pathsOf('视频文件绝对路径列表'),
+        trackMode: str('音轨处理：first 只取第一条（默认）/ all 每条各导一个文件 / mix 混合成一条', {
+          enum: ['first', 'all', 'mix']
+        }),
         format: str('目标音频格式，默认 m4a', { enum: ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg', 'opus', 'alac'] }),
-        bitrate: num('有损格式码率 kbps，如 192', { minimum: 32, maximum: 512 }),
+        bitrate: num('有损格式码率 kbps；不传则沿用源音轨码率（夹在 64–320）', { minimum: 32, maximum: 512 }),
         quality: str('MP3 VBR 质量 0-9（0 最高），设置后忽略 bitrate'),
         sampleRate: num('目标采样率 Hz', { enum: [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000] }),
         channels: num('目标声道数', { enum: [1, 2] }),
@@ -599,6 +646,12 @@ export const TOOL_DEFS = {
   }
 }
 
+/**
+ * 逐个注册工具。定义缺失时直接抛错——注册期就暴露问题，好过调用时才 404。
+ * @param {object} utools 宿主对象（需带 registerTool）
+ * @returns {number} 注册数量
+ * @throws {Error} TOOL_NAMES 里有工具缺少 TOOL_DEFS 时抛出
+ */
 export function registerAllTools(utools) {
   const missing = TOOL_NAMES.filter((name) => !TOOL_DEFS[name])
   if (missing.length) throw new Error(`工具缺少定义：${missing.join(', ')}`)

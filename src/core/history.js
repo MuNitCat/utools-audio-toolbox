@@ -4,10 +4,19 @@ import { getState, setState } from './store.js'
 
 const LIMIT = 5
 
+/**
+ * 取 preload 暴露的桥接对象；SSR 或单测环境返回 null。
+ * @returns {object|null} window.audioServices
+ */
 function api() {
   return typeof window !== 'undefined' ? window.audioServices : null
 }
 
+/**
+ * 启动时把配置里的常用艺术家读进 store。
+ * 旧配置可能存了非字符串或超量数据，这里统一过滤 + 截断。
+ * @returns {string[]} 过滤后的列表（最多 LIMIT 个）
+ */
 export function loadArtistHistory() {
   const a = api()
   if (!a || typeof a.getConfig !== 'function') return []
@@ -21,7 +30,11 @@ export function loadArtistHistory() {
   }
 }
 
-/** 记一笔（去重 + 最新在前 + 最多 5 个），返回更新后的列表 */
+/**
+ * 记一笔（去重 + 最新在前 + 最多 5 个），同时写回配置。
+ * @param {string} raw 用户输入的艺术家名，空值直接忽略
+ * @returns {string[]} 更新后的列表
+ */
 export function rememberArtist(raw) {
   const name = String(raw || '').trim()
   if (!name) return getState().artistHistory

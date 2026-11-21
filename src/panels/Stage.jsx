@@ -4,6 +4,10 @@ import { addPaths, pickFiles } from '../core/ingest.js'
 import { formatBytes, formatClock, formatShort } from '../core/format.js'
 import Icon from '../components/Icon.jsx'
 
+/**
+ * 拖放处理。Electron 32+ 拿不到 File.path，必须走 preload 的 pathForFile。
+ * @returns {{over: boolean, setOver: (v: boolean) => void, handleDrop: Function, handleOver: Function}}
+ */
 function useDrop() {
   const [over, setOver] = useState(false)
   const handleDrop = async (e) => {
@@ -24,6 +28,11 @@ function useDrop() {
   return { over, setOver, handleDrop, handleOver }
 }
 
+/**
+ * 文件区：空态是拖放区，有文件时列出名称/格式/时长/码率/采样率。
+ * 视频文件的码率显示音轨码率，容器总码率放进悬停提示。
+ * @returns {JSX.Element}
+ */
 export default function Stage() {
   const files = useStore((s) => s.files)
   const probing = useStore((s) => s.probing)
@@ -80,11 +89,28 @@ export default function Stage() {
       <div className={`stage-list${over ? ' over' : ''}`} onDragOver={handleOver} onDragLeave={() => setOver(false)} onDrop={handleDrop}>
         {files.map((f) => {
           const info = f.info || {}
+          // 视频的总码率含画面，列表里给音轨码率；容器码率放进悬停提示
+          const isVideo = Boolean(info.hasVideo)
+          const bitrate = isVideo ? info.streamBitrate || info.bitrate : info.bitrate
           const sub = info.ok
-            ? [formatClock(info.duration, false), info.bitrate ? `${info.bitrate}kbps` : '', info.sampleRate ? `${info.sampleRate}Hz` : '']
+            ? [
+                formatClock(info.duration, false),
+                bitrate ? `${isVideo ? '音频 ' : ''}${bitrate}kbps` : '',
+                info.sampleRate ? `${info.sampleRate}Hz` : ''
+              ]
                 .filter(Boolean)
                 .join(' · ')
             : f.error || '读取中…'
+          const subTitle = info.ok
+            ? [
+                isVideo ? `视频容器总码率 ${info.bitrate || '?'}kbps` : '',
+                info.codec ? `编码 ${info.codec}` : '',
+                info.channels ? `${info.channels} 声道` : '',
+                info.bitsPerSample ? `${info.bitsPerSample}bit` : ''
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : ''
           return (
             <div className="file-item" key={f.path}>
               <span className="name" title={f.path}>
@@ -92,7 +118,9 @@ export default function Stage() {
               </span>
               {info.ok && <span className="pill">{info.ext || '?'}</span>}
               {!info.ok && f.error && <span className="pill bad">!</span>}
-              <span className="sub">{sub}</span>
+              <span className="sub" title={subTitle}>
+                {sub}
+              </span>
               <button className="remove" title="移除" onClick={() => removeFile(f.path)}>
                 <Icon name="close" size={13} />
               </button>

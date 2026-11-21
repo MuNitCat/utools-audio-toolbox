@@ -147,6 +147,11 @@ const PATHS = {
   moon: <path d="M20.2 14.6A8.3 8.3 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z" />
 }
 
+/**
+ * 线性图标：统一 24 网格 + 1.6 描边，颜色继承 currentColor。
+ * @param {{name: string, size?: number, className?: string}} props name 取 PATHS 的键，未知时回退到 sliders
+ * @returns {JSX.Element}
+ */
 export default function Icon({ name, size = 16, className = '' }) {
   const body = PATHS[name] || PATHS.sliders
   return (

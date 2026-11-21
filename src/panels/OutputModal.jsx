@@ -1,10 +1,27 @@
 import { useEffect } from 'react'
 import Icon from '../components/Icon.jsx'
+import { FEATURES, GROUPS, isPinnedFeature } from '../core/features.js'
 import { OUTPUT_MODES, describeOutput } from '../core/output.js'
 
-/** 输出设置弹窗：原来常驻在参数栏底部，现在收进齿轮里 */
+/**
+ * 应用设置弹窗：输出位置、覆盖策略，以及侧边栏显示哪些功能。
+ * 改动即时生效，不设「保存」按钮。
+ * @param {{open: boolean, onClose: () => void, settings: object, onChange: (patch: object) => void}} props
+ * @returns {JSX.Element|null} 关闭时返回 null
+ */
 export default function OutputModal({ open, onClose, settings, onChange }) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
+
+  // 常驻功能不进列表（反正不能取消），旧配置里混进来的常驻 id 也顺手清掉
+  const pickable = FEATURES.filter((f) => !f.hidden && !isPinnedFeature(f.id))
+  const hiddenSet = new Set((settings.hiddenFeatures || []).filter((id) => !isPinnedFeature(id)))
+
+  const toggleFeature = (id, checked) => {
+    const set = new Set(hiddenSet)
+    if (checked) set.delete(id)
+    else set.add(id)
+    onChange({ hiddenFeatures: [...set] })
+  }
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined
@@ -18,7 +35,7 @@ export default function OutputModal({ open, onClose, settings, onChange }) {
     <div className="modal-mask" onClick={onClose}>
       <div className="modal output-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>输出设置</h3>
+          <h3>应用设置</h3>
           <button className="icon-btn" onClick={onClose} aria-label="关闭">
             <Icon name="close" size={14} />
           </button>
@@ -58,7 +75,7 @@ export default function OutputModal({ open, onClose, settings, onChange }) {
                   {settings.dir || '未选择'}
                 </div>
                 <button
-                  className="btn-ghost"
+                  className="btn-ghost btn-pick"
                   onClick={() => {
                     const dir = api ? api.chooseDir('选择输出目录') : ''
                     if (dir) onChange({ dir })
@@ -70,26 +87,7 @@ export default function OutputModal({ open, onClose, settings, onChange }) {
             </div>
           )}
 
-          <div className="field">
-            <label>CPU 占用</label>
-            <div className="segment">
-              {[
-                { v: 0, l: '自动' },
-                { v: 4, l: '中' },
-                { v: 2, l: '低' }
-              ].map((o) => (
-                <button
-                  key={o.v}
-                  className={Number(settings.threads) === o.v ? 'active' : ''}
-                  onClick={() => onChange({ threads: o.v })}
-                >
-                  {o.l}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="field-row">
+          <div className="field-row tight">
             <label>覆盖同名文件</label>
             <label className="switch">
               <input
@@ -102,6 +100,51 @@ export default function OutputModal({ open, onClose, settings, onChange }) {
 
           <div className="ff-hint">
             关掉「覆盖同名文件」时，遇到重名会自动加 (1)(2) 后缀，不会动原文件。
+          </div>
+
+          <div className="field">
+            <label>任务并行数</label>
+            <div className="segment">
+              {[1, 2, 3, 4].map((n) => (
+                <button
+                  key={n}
+                  className={Number(settings.parallel) === n ? 'active' : ''}
+                  onClick={() => onChange({ parallel: n })}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <div className="field-hint">
+              同时处理几个文件；每个 ffmpeg 默认吃满所有核心，2 路已经够快，机器弱就用 1。
+            </div>
+          </div>
+
+          <div className="modal-sub">侧边栏显示</div>
+
+          {GROUPS.map((group) => {
+            const items = pickable.filter((f) => f.group === group.id)
+            if (!items.length) return null
+            return (
+              <div className="pick-group" key={group.id}>
+                <div className="pick-group-title">{group.name}</div>
+                <div className="pick-grid">
+                  {items.map((f) => {
+                    const checked = !hiddenSet.has(f.id)
+                    return (
+                      <label className="pick-row" key={f.id} title={f.desc}>
+                        <input type="checkbox" checked={checked} onChange={(e) => toggleFeature(f.id, e.target.checked)} />
+                        <span>{f.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+
+          <div className="ff-hint">
+            取消勾选只是不在左侧导航里出现，功能本身和对应的 MCP 工具照常可用。「格式转换」「视频提取音频」是常驻功能，始终显示，不在此列表中。
           </div>
         </div>
 

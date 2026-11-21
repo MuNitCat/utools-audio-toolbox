@@ -12,6 +12,12 @@ const ALIASES = {
 
 const FIELDS = Object.keys(ALIASES)
 
+/**
+ * 按别名列表取第一个非空标签值：不同容器的键名不统一（id3 / vorbis / mp4）。
+ * @param {Record<string, string>} tags probe 得到的标签表
+ * @param {string} field 表单字段名（ALIASES 的键）
+ * @returns {string} 去首尾空白后的值；没有则空字符串
+ */
 function readTag(tags, field) {
   if (!tags) return ''
   for (const key of ALIASES[field]) {
@@ -24,6 +30,9 @@ function readTag(tags, field) {
 /**
  * 把文件的标签映射成表单参数。
  * 只填「当前为空」的字段，避免覆盖用户已经改过的内容。
+ * @param {object} info probe 结果（只读 info.tags）
+ * @param {Record<string, string>} [current] 当前表单值，非空字段会被跳过
+ * @returns {Record<string, string>} 需要回填的字段
  */
 export function tagsToParams(info, current = {}) {
   const tags = (info && info.tags) || {}
@@ -36,6 +45,11 @@ export function tagsToParams(info, current = {}) {
   return out
 }
 
+/**
+ * 判断文件是否带任一常见标签，用于界面提示「有没有可读的标签」。
+ * @param {object} info probe 结果
+ * @returns {boolean} 任意一个常见字段有值即为 true
+ */
 export function hasAnyTag(info) {
   const tags = (info && info.tags) || {}
   return FIELDS.some((field) => Boolean(readTag(tags, field)))

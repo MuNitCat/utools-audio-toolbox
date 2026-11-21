@@ -7,6 +7,12 @@ export const OUTPUT_MODES = [
   { value: 'custom', label: '指定目录' }
 ]
 
+/**
+ * 向宿主要系统目录（downloads / desktop / …）。
+ * 宿主没提供 getPath 或抛错时一律当「不可用」，由调用方降级显示。
+ * @param {string} name uTools getPath 的约定名
+ * @returns {string} 绝对路径；取不到时返回空字符串
+ */
 function pathOf(name) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   if (!api || typeof api.getPath !== 'function') return ''
@@ -17,7 +23,11 @@ function pathOf(name) {
   }
 }
 
-/** @returns {string} 空字符串表示「跟随源文件」 */
+/**
+ * 把设置里的模式解析成真实目录。
+ * @param {{mode?: string, dir?: string}} settings 应用设置
+ * @returns {string} 绝对路径；空字符串表示「跟随源文件同目录」
+ */
 export function resolveOutputDir(settings) {
   const s = settings || {}
   if (s.mode === 'custom') return s.dir || ''
@@ -26,7 +36,11 @@ export function resolveOutputDir(settings) {
   return ''
 }
 
-/** 给界面显示的一行说明 */
+/**
+ * 给界面显示的一行说明（设置弹窗里的「实际位置」）。
+ * @param {{mode?: string, dir?: string}} settings 应用设置
+ * @returns {string} 可直接展示的中文描述
+ */
 export function describeOutput(settings) {
   const s = settings || {}
   if (s.mode === 'custom') return s.dir || '未选择目录'

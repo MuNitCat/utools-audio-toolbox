@@ -29,7 +29,7 @@ UI (React)                     MCP (AI Agent)
               ▼
    src/core/args.js   唯一的 ffmpeg 参数生成处
               ▼
-   src/core/queue.js  串行执行、op 权重进度、取消/重试
+   src/core/queue.js  2 路并行、op 权重进度、取消/重试
               ▼
    window.audioServices（preload 暴露）
               ▼
@@ -53,7 +53,7 @@ UI (React)                     MCP (AI Agent)
 | 9 | **默认永不覆盖原文件** | 冲突时 `resolveOutput()` 追加 ` (1) (2)`；覆盖必须显式 `overwrite: true` |
 | 10 | **未指定输出目录时落到源文件同级** | `preload/lib/paths.js` 的 `resolveOutput()`；这是产品决策，别改成下载目录 |
 | 11 | **不要注册 `onPluginOut` 去 kill ffmpeg** | ffmpeg 由宿主 spawn，插件窗口销毁带不走它；用户明确要求关掉窗口就让任务跑完 |
-| 12 | **队列串行** | 每个 `runFFmpeg` 默认 `-threads 0` 吃满核心，并行只会互相拖慢并卡死系统。仅供「CPU 占用」下调 `-threads` |
+| 12 | **队列并行数 1–4，默认 2** | 由「应用设置 → 任务并行数」写入配置 `concurrency`，前端用 `setConcurrency()` 生效（内部夹在 1–4）。别随手放宽上限：每个 `runFFmpeg` 默认 `-threads 0` 吃满核心，再多会互相拖慢并卡死系统。线程数固定交给 ffmpeg 自己决定（`args.js` 的 `threads()` 仍支持传值，但界面已经没有入口，别再加回来） |
 | 13 | **ffmpeg 选择要同时读「偏好」和「探测」** | `binaries.preference()` 返回 `{mode, path}`：`auto` 走探测、`custom` 用指定路径、`host` 强制内置。`setPreference()` 除了写 config，还维护一份进程内 `override`（config 写失败也不至于静默不生效）。自定义路径失效时必须回退到自动探测，并通过 `summary().customInvalid` 告诉界面 |
 | 14 | **两条后端必须行为一致** | `preload/lib/binaries.js` 决定用系统 ffmpeg（`spawn` + `-progress pipe:1`）还是宿主 `utools.runFFmpeg`；`probe.js` 决定用 ffprobe 的 JSON 还是 stderr 解析。**加参数/加字段时两条路径都要能跑**，`mapProbeJson()` 的输出结构必须与 `parseProbe()` 逐字段对齐 |
 | 15 | **`args.js` 的每个构造器都必须以 output 结尾** | `ffmpeg.js` 的 `withProgress()` 把 `-nostats -progress pipe:1` 插在**倒数第一个参数**之前。若输出不在末尾，参数会被插错位置（最典型的错误是插到 `-i` 与输入路径之间） |
@@ -90,8 +90,11 @@ op 支持的字段：`weight`（进度权重，两遍法 0.25/0.75）、`capture
 - 层级约定：`.tip-host::after` 400 > `.toast` 300 > `.modal-mask` 100。新增浮层时按这个排，别再用 90 之类的中间值——之前的 bug 就是 `toast` 的 90 低于蒙版 100，弹窗里点「复制」看不到提示
 - 控件表面色用 `--surface`（浅色白、深色比背景亮一档），别用 `--bg`——深色下 `--bg` 和面板同色，按钮就看不出边界了
 - 频谱/波形图在任务完成后由 `queue.js` 用 `audioServices.coverDataUrl()` 读成 **data URL** 塞进 `store.preview`，**只有 `Viewer.jsx` 渲染它**（`store.preview` 会跨功能保留，别在 `Stage` 或别处再读，否则切到别的功能时文件列表上方会莫名多出一张图）。**不要直接 `<img src="file://...">`**：开发模式页面是 `http://localhost:5180`，引用 `file://` 会被 Chromium 拦掉（生产走 `file://` 虽然能用，但两边行为不一致）
-- 参数渲染是配置驱动的，`panels/Params.jsx` 的 `kindOf()` 决定用分段控件、卡片网格还是下拉；想强制某种样式就给字段加 `ui: 'segment' | 'grid'`
+- 参数渲染是配置驱动的，`panels/Params.jsx` 的 `kindOf()` 决定用分段控件、卡片网格还是下拉；想强制某种样式就给字段加 `ui: 'segment' | 'grid'`。`field.hint` 也可以是函数，**签名固定为 `(params, ctx)`**（`ctx.files` 是已载入文件，带 probe 的 info），要按文件数量/参数算文案就用它；`switch` 字段同样支持 `hint`（提示渲染在开关行下方）
+- **取消要双保险**（`queue.js`）：`cancel()` 先 `aborters.get(id).fire()` 让 task 的每个 await 立刻以「已取消」失败，再调 `api.cancelTask()` 通知 preload 杀进程。只靠杀进程不行——宿主的 `runFFmpeg` 未必能 kill，进程会一直跑到结束，界面就卡在「取消不了」的状态
+- **侧栏显示哪些功能由配置项 `hiddenFeatures`（id 数组）决定**：`MainPage` 传给 `Sidebar`，`panels/OutputModal.jsx`（「应用设置」）负责勾选。只影响显示——`getFeature(id)`、MCP 工具、队列都不看这个数组，所以隐藏掉的功能仍能被 Agent 调用；隐藏当前功能时要自动跳到第一个仍可见的项（否则参数面板会停在一个侧栏里找不到的功能上）。两个相关常量都在 `features.js`：`PINNED_FEATURE_IDS`（常驻：不列进勾选列表、读取配置时也要过滤掉）与 `DEFAULT_HIDDEN_FEATURES`（首屏默认收起，目前是 `visualize`），改默认值要连 `preload/lib/config.js` 的 `DEFAULTS.hiddenFeatures` 一起改
 - 样式全在 `styles/global.css`，深浅色靠 `prefers-color-scheme` 下的 CSS 变量，**不要写死颜色**，一律用 `var(--...)`
+- **下拉一律用 `components/Select.jsx`，禁止写原生 `<select>`**：原生弹层在 uTools 里是系统白底，深色主题直接割裂。自绘版把弹层 portal 到 `body` + `position: fixed`（否则会被 `.panel` 的 `overflow-y: auto` 裁掉），空间不够自动向上翻，带 ↑↓/Home/End/Enter/Esc 键盘操作
 
 ### 加 FFmpeg 能力前先确认宿主支持
 
@@ -123,9 +126,37 @@ op 支持的字段：`weight`（进度权重，两遍法 0.25/0.75）、`capture
 ## 7. 风格
 
 - 不引 UI 库、不引状态库、不引图标库。现有依赖只有 `react` / `react-dom`（devDeps 是 vite 和 react 插件）
-- 注释写「为什么」，不写「是什么」；涉及宿主怪癖的地方必须注明现象（例如上面第 3 节的条目）
 - 时间/体积格式化、stderr 解析等纯逻辑放 `src/core/format.js`，保持可单测、不依赖 `window`
 - 面向用户的文案用中文；代码标识符用英文
+- 涉及宿主怪癖的地方必须注明现象与结论（例如第 3 节的条目），否则下一个人一定会再踩一次
+
+### 7.1 注释与 JSDoc
+
+**先判断要不要拆，再决定要不要写注释。** 只有具备独立职责、能复用或能单测的逻辑才拆成函数；不要为了「有地方写注释」把一句话包成函数。内联的箭头函数（`map` / `filter` / `onClick` 里的回调）不写 JSDoc。
+
+- **JSDoc 只写在值得单独声明的函数上**：新增或实质修改的函数，在声明正上方写多行 JSDoc，一两句说清职责与关键约束，不复述实现。
+- **参数和返回必须写全**：每个参数一个 `@param`（类型 + 含义，不能只有名字）；一定有 `@returns`；函数会主动 `throw` 时补 `@throws`。无返回值写「无返回值」，返回 Promise 写「操作完成后 resolve 的 Promise」——留空等于没写。
+- **函数体内在关键步骤前写单行注释**：准备、校验、状态切换、资源发布、回滚、清理。注释说明这一步的**目的、约束或失败边界**，而不是逐行复述代码在干什么。
+- **改实现必须同步改注释**：与当前行为矛盾的旧注释比没有注释更糟；行为变了就连注释一起改，注释里的断言失效就直接删。
+- 存量没碰过的代码不强求补注释；一旦新增函数、改函数体或改行为，就按上面补齐。
+
+```js
+/**
+ * 从视频容器取音轨；mix=true 时用 amix 混合全部音轨（只能重编码）
+ * @param {object} opts 调用参数
+ * @param {string} opts.input 输入文件绝对路径
+ * @param {boolean} [opts.mix] 是否混合多音轨
+ * @returns {string[]} 可直接交给 ffmpeg 的参数数组
+ * @throws {Error} 输出格式不在 CONTAINERS 里时抛出
+ */
+```
+
+反例（这类注释没有信息量，不如不写）：
+
+```js
+// 遍历文件列表（代码就在下一行）
+for (const f of files) { … }
+```
 
 ## 8. 不要做
 
