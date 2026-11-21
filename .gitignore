@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物：构建时 emptyOutDir 会清空，每次由 scripts/build-plugin.mjs 重新生成
+dist/
+*.upx
+*.zip
+
+# uTools 打包/临时
+*.tmp
+
+# 日志与缓存
+*.log
+pnpm-debug.log*
+npm-debug.log*
+.vite/
+.eslintcache
+.cache/
+
+# 环境变量与本地配置
+.env
+.env.local
+.env.*.local
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

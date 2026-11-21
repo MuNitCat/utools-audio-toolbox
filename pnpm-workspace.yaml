@@ -1,0 +1,4 @@
+# pnpm 12 起构建脚本要在 allowBuilds 里显式放行（配置项已迁出 package.json，见 https://pnpm.io/settings）
+# esbuild 需要执行安装脚本以获得当前平台的二进制，pnpm 默认拦截
+allowBuilds:
+  esbuild: true
