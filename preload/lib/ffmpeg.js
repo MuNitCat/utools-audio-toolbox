@@ -12,6 +12,26 @@
 
 const { spawn } = require('node:child_process')
 const binaries = require('./binaries')
+const guard = require('./guard')
+const { validateRunArgs, validateCaptureArgs } = require('./argswhitelist')
+
+/** 参数白名单需要的能力集合（注入而不是直接依赖，方便单测） */
+const ARG_CTX = {
+  assertRead: guard.assertReadFile,
+  assertWriteTarget: guard.assertWriteTarget,
+  isTemp: guard.isTemp
+}
+
+/**
+ * @param {string} reason 中文原因
+ * @returns {Error} code=EARGS_INVALID 的错误（不设 tail/log，界面直接显示这句）
+ */
+function argError(reason) {
+  const err = new Error(`参数未通过安全校验：${reason}`)
+  err.code = 'EARGS_INVALID'
+  err.stage = 'validate'
+  return err
+}
 
 const procs = new Map()
 const MAX_LINES = 60
@@ -191,10 +211,26 @@ function hostRun(id, args, opts = {}) {
 
 /* ------------------------------ 对外 API ------------------------------ */
 
-function run(id, args, opts = {}) {
+/**
+ * 执行 ffmpeg（唯一入口，index / probe / previewer 都走这里，保证参数一定过白名单）。
+ * @param {string} id 任务 id
+ * @param {string[]} args 参数数组
+ * @param {{onProgress?: Function, onLog?: Function}} [opts] 回调
+ * @returns {Promise<void>} 进程结束后 resolve；参数不合规时 reject
+ * @throws {Error} EARGS_INVALID 或 ffmpeg 自身失败
+ */
+async function run(id, args, opts = {}) {
+  const chk = validateRunArgs(args, ARG_CTX)
+  if (!chk.ok) throw argError(chk.error)
+  // 先登记「本次产出」再执行：任务中途失败/被取消时，半成品也归本次会话所有，
+  // 否则队列的失败清理会被白名单挡掉，残留文件删不掉
+  if (chk.output) guard.noteProduced(chk.output)
   const bin = binaries.ffmpegPath()
-  if (bin) return spawnRun(id, bin, args, opts)
-  return hostRun(id, args, opts)
+  if (bin) {
+    await spawnRun(id, bin, args, opts)
+  } else {
+    await hostRun(id, args, opts)
+  }
 }
 
 /**
@@ -203,6 +239,10 @@ function run(id, args, opts = {}) {
  * @returns {Promise<{ok:boolean, text:string, error?:Error}>}
  */
 function capture(id, args) {
+  // 采集只允许 probe.js 的两种形态，避免绕开 run 的校验
+  const chk = validateCaptureArgs(args, ARG_CTX)
+  if (!chk.ok) return Promise.reject(argError(chk.error))
+
   const ring = createRing(500000)
   const bin = binaries.ffmpegPath()
 

@@ -8,7 +8,7 @@ uTools 插件「音频批量处理」。React 18 + Vite 5，`preload` 是 Common
 
 ```bash
 pnpm install
-pnpm dev               # 5180（strictPort）；换端口要同时改 vite.config.js 和 plugin.json 的 development.main
+pnpm dev               # 5180（strictPort，host 固定 127.0.0.1）；换端口/地址要同时改 vite.config.js 和 plugin.json 的 development.main
 pnpm build             # vite build + scripts/build-plugin.mjs 校验 → dist/
 ```
 
@@ -33,6 +33,10 @@ UI (React)                     MCP (AI Agent)
               ▼
    window.audioServices（preload 暴露）
               ▼
+   preload/lib/argswhitelist.js   逐 token 校验（flag 白名单 + 输入/输出路径必须已授权）
+              ▼
+   preload/lib/guard.js           会话级路径白名单（readFiles/readDirs/writeDirs/produced）
+              ▼
    utools.runFFmpeg(args, { onProgress, onLog })
 ```
 
@@ -47,17 +51,25 @@ UI (React)                     MCP (AI Agent)
 | 3 | **FLAC 合并一律重编码** | `-f concat -c copy` 写 FLAC 时 STREAMINFO 的总采样数只记第一段，播放器会按分段时长截断。见 `features.js` 的 `copyUnsafe` |
 | 4 | **loudnorm 第二遍必须显式 `-ar 48000`** | `loudnorm` 内部升到 192kHz，不拉回来输出就变成 192k |
 | 5 | **没有 ffprobe** | 时长/码率/采样率/标签只能解析 `ffmpeg -i` 的 stderr，见 `preload/lib/probe.js`。日志可能走 `onLog`，也可能只在异常 `message`，两处都要收 |
-| 6 | **工具名单一来源** | `src/core/tool-names.js` 是唯一清单；`plugin.json.tools` 与 `registerTool()` 必须逐字一致，构建脚本断言 |
+| 6 | **工具名单一来源** | 名字清单只有 `src/core/tool-names.js`，schema 只有 `src/core/tool-schemas.js` 的 `TOOL_DEFS`；`dist/plugin.json` 的 `tools` 由 `scripts/build-plugin.mjs` **从 TOOL_DEFS 生成**，根 `plugin.json` 不再手写 `tools`（写了会直接构建失败）。加工具只改这两处 + `mcp.js` 的 handler |
 | 7 | **`registerTool` 必须在模块加载时执行** | MCP 调用会在插件未打开时静默拉起插件，只等注册完成。放进 `useEffect` / 组件挂载里会导致工具调不通。入口是 `src/core/register.js`，由 `src/main.jsx` 在 App 之前顶层 import |
 | 8 | **preload 不暴露 fs / path / child_process 裸对象** | 渲染层通过 `window.audioServices` 的编排级方法操作；`preload/lib/ffmpeg.js` 也不把进程对象交出去 |
 | 9 | **默认永不覆盖原文件** | 冲突时 `resolveOutput()` 追加 ` (1) (2)`；覆盖必须显式 `overwrite: true` |
-| 10 | **未指定输出目录时落到源文件同级** | `preload/lib/paths.js` 的 `resolveOutput()`；这是产品决策，别改成下载目录 |
+| 10 | **未指定输出目录时落到源文件同级** | `src/core/paths.js` 的 `resolveOutput()`（规则已从 preload 下沉到前端）；这是产品决策，别改成下载目录 |
 | 11 | **不要注册 `onPluginOut` 去 kill ffmpeg** | ffmpeg 由宿主 spawn，插件窗口销毁带不走它；用户明确要求关掉窗口就让任务跑完 |
 | 12 | **队列并行数 1–4，默认 2** | 由「应用设置 → 任务并行数」写入配置 `concurrency`，前端用 `setConcurrency()` 生效（内部夹在 1–4）。别随手放宽上限：每个 `runFFmpeg` 默认 `-threads 0` 吃满核心，再多会互相拖慢并卡死系统。线程数固定交给 ffmpeg 自己决定（`args.js` 的 `threads()` 仍支持传值，但界面已经没有入口，别再加回来） |
-| 13 | **ffmpeg 选择要同时读「偏好」和「探测」** | `binaries.preference()` 返回 `{mode, path}`：`auto` 走探测、`custom` 用指定路径、`host` 强制内置。`setPreference()` 除了写 config，还维护一份进程内 `override`（config 写失败也不至于静默不生效）。自定义路径失效时必须回退到自动探测，并通过 `summary().customInvalid` 告诉界面 |
+| 13 | **ffmpeg 选择要同时读「偏好」和「探测」** | `binaries.preference()` 返回 `{mode, path}`：`auto` 走探测、`custom` 用指定路径、`host` 强制内置。`setPreference()` 必须先 `await validatePath()` 通过才写本机配置，并刷新进程内 `prefCache`。自定义路径失效时必须回退到自动探测，并通过 `summary().customInvalid` 告诉界面 |
 | 14 | **两条后端必须行为一致** | `preload/lib/binaries.js` 决定用系统 ffmpeg（`spawn` + `-progress pipe:1`）还是宿主 `utools.runFFmpeg`；`probe.js` 决定用 ffprobe 的 JSON 还是 stderr 解析。**加参数/加字段时两条路径都要能跑**，`mapProbeJson()` 的输出结构必须与 `parseProbe()` 逐字段对齐 |
 | 15 | **`args.js` 的每个构造器都必须以 output 结尾** | `ffmpeg.js` 的 `withProgress()` 把 `-nostats -progress pipe:1` 插在**倒数第一个参数**之前。若输出不在末尾，参数会被插错位置（最典型的错误是插到 `-i` 与输入路径之间） |
 | 16 | **视频画面与内嵌封面共用 Video 流** | ffprobe 与 `ffmpeg -i` 都把封面报成 video 流，唯一的区分是 `disposition.attached_pic` / `(attached pic)`。`probe.js` 据此区分 `hasCover` 与 `hasVideo`：**别再把任意 video 流当封面**，否则视频文件会在「标签与封面」里多出一个「导出原封面」 |
+| 17 | **preload 新增接口一律过 guard** | 审核要求「只允许操作经选择/拖入得到的路径」。任何接受文件路径的 bridge 方法，必须调用 `guard.assertReadFile / assertWriteDir / assertWriteTarget / assertDelete` 之一；不要新增「直接 fs 操作」的裸接口。`writeBase64`、`ensureDir`、`size` 已按此原则删除，别加回来 |
+| 18 | **新增 ffmpeg flag 必须登记白名单** | `preload/lib/argswhitelist.js` 默认拒绝未登记 flag。改 `args.js` 加了新参数，必须同时：① 在 `buildSpec` 里登记值规则；② 跑 `node scripts/check/features-args.test.mjs`，它会把 17 个功能的真实参数全部过一遍 |
+| 19 | **删除 / 覆盖只认本次产出** | `guard.assertDelete` 只放行 `produced` 与插件临时目录；`assertWriteTarget` 对已存在且非本次产出的文件一律拒绝（即便 `overwrite=true`）。`ffmpeg.run` 在**执行前**就 `noteProduced(output)`，这样失败/取消时半成品也删得掉 |
+| 20 | **本机路径不进同步库** | `ffmpegPath / ffmpegMode / ffmpegExtras / outputDir` 只写插件本地 `config.local.json`；`config.setConfig` 会静默剥离这些键，只能走 `setLocal`（由 binaries 内部调用） |
+| 21 | **输出命名规则只在 `src/core/paths.js`** | preload 里那份同名实现（`resolveOutput / numberedOutput / extOf / stripExt`）已删除，`preload/lib/exts.js` 只剩扩展名常量。改命名规则只改 `src/core/paths.js`，并跑 `scripts/check/paths.test.mjs`（17 例 golden 断言，锁死用户看到的文件名） |
+| 21b | **扩展名数据只有 `shared/exts.json` 一份** | preload（`lib/exts.js`，CJS require）与前端（`core/paths.js`，ESM import）读同一个文件，构建时 `shared/` 会一起拷进 `dist/`——这是 preload 里唯一引用包外相对路径的地方，改目录结构必须同步 `scripts/build-plugin.mjs` 的拷贝与 `required` 断言。`plugin.json` 的文件关联 `extensions` 仍写在清单里，构建脚本会断言它等于 `audio + video` |
+| 22 | **页面不得拥有「写白名单」的接口** | `window.audioServices` 里不存在 `grantPaths / grantDir`（曾有过，审核标准 2.2 点名「白名单能被页面自己写入也算」违规）。授权只发生在 preload 内部的用户手势：`pathForFile`（拖入）、`chooseFiles / chooseDir`（选择框）、`getPath`、宿主 payload。`scripts/check/api-surface.test.mjs` 会断言导出面与快照逐字相同，新增接口必须显式登记 |
+| 23 | **宿主 `onPluginEnter` 是单槽赋值，只能 preload 注册** | uTools 的实现是 `onPluginEnter: (e) => { window.utools.__event__.onPluginEnter = e }`——**后注册覆盖先注册**。preload 与页面各注册一次只有一个能收到事件，所以监听权归 preload（`preload/index.js` 的 `handlePluginEnter`），页面用 `audioServices.onEnterFiles(cb)` 订阅；不要在 `App.jsx` 里再调 `utools.onPluginEnter`，那会把授权回调顶掉，表现为「文件关联进来列表是空的」 |
 
 其他不可逆的细节：
 
@@ -73,7 +85,7 @@ UI (React)                     MCP (AI Agent)
 1. `src/core/features.js` 的 `FEATURES` 里加对象：`{ id, group, name, desc, tool?, fields[], build() }`
 2. `build` 返回 `[{ input, ops: [{ type:'ffmpeg', args, output, weight, label }] }]`
 3. `args.js` 里加参数构造函数（**不要**在 features 里拼 args）
-4. 需要 MCP：在 `tool-names.js` 加名字 → `mcp.js` 的 `TOOL_DEFS` 加 schema、`handlers` 加实现 → `plugin.json.tools` 同步（构建脚本会校验一致性）
+4. 需要 MCP：在 `tool-names.js` 加名字 → `tool-schemas.js` 的 `TOOL_DEFS` 加 schema、`mcp.js` 的 `handlers` 加实现。`dist/plugin.json` 的 tools 是构建时生成的，不用手改，也不要改根 `plugin.json`
 5. 需要图标：`components/Icon.jsx` 加一条 path，并在 `FEATURE_ICON` 里映射
 
 op 支持的字段：`weight`（进度权重，两遍法 0.25/0.75）、`capture`（要读 stderr）、`parse`（`loudnorm` / `silence`）、`dynamic: 'splitSegments'`（先探测再动态展开 op）、`rebuild(measured)`（把测量值注入第二遍）。
@@ -85,6 +97,7 @@ op 支持的字段：`weight`（进度权重，两遍法 0.25/0.75）、`capture
   - **即时预览**（`preload/lib/previewer.js` + `core/previewer.js`）：取中间 60 秒渲染到临时目录，读完即删，只塞 `store.preview`，**不产出文件**
   - **完整图**（`features.visualize` → 队列）：产出 PNG 到输出目录，完成后 `queue.js` 把图读成 data URL 也写进 `store.preview`（`source: 'full'`）
 - 主题三档在 `store.js` 的 `applyTheme()`：**用 `matchMedia` 把 `auto` 解析成 `light`/`dark`**，再写到 `<html data-theme>`；CSS 只认 `:root` 与 `:root[data-theme='dark']` 两套变量。监听 `prefers-color-scheme` 变化，但只在 auto 模式下重算
+- ⚠️ **uTools 里页面全白、浏览器打开却正常 → 先 `curl http://127.0.0.1:5180/`**：多半是 dev server 只绑了 IPv6 `[::1]`（Node 17+ 的 `localhost` 常先解析到 `::1`），而 `plugin.json` 写的是 `127.0.0.1`，宿主按 IPv4 连就被拒。`vite.config.js` 的 `server.host` 必须显式写 `127.0.0.1`。别在这上面怀疑 React 代码——用 `lsof -nP -iTCP:5180` 看是 `IPv4` 还是 `IPv6` 更快
 - ⚠️ **不要用 `light-dark()`**：uTools 的渲染进程不支持，变量会变成无效值 → `background`/`border` 整条声明失效，界面直接变全透明（踩过，线上就是这个症状）。新颜色一律加进 `:root` 和 `:root[data-theme='dark']` 两块
 - **新增 preload API 时，前端必须做能力检测 + 兜底**：`preload` 不热更新，开发中很容易出现「界面是新代码、preload 是旧的」，`typeof api.xxx === 'function'` 判断为假时要么降级要么明确提示「需要完全退出插件重进」，不能静默失败（FFmpeg 弹窗曾因此一直显示「尚未扫描」）
 - 层级约定：`.tip-host::after` 400 > `.toast` 300 > `.modal-mask` 100。新增浮层时按这个排，别再用 90 之类的中间值——之前的 bug 就是 `toast` 的 90 低于蒙版 100，弹窗里点「复制」看不到提示

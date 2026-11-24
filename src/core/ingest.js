@@ -1,12 +1,13 @@
 import { addFiles, getState, setState, updateFile } from './store.js'
+import { AUDIO_EXTS, VIDEO_EXTS } from './paths.js'
 
 /**
  * 把路径（文件或目录）加入列表并探测。
- * 拖入目录时递归展开；已存在的路径自动去重。
- */
-/**
- * 把路径（文件或目录）加入列表并探测。
  * 拖入目录时递归展开；已存在的路径去重；探测是逐个完成的，每完成一个就刷一次界面。
+ *
+ * 前置条件：路径必须已经由 preload 授权（拖入走 pathForFile、选择框走 chooseFiles、
+ * 文件关联走 preload 自己监听的 onPluginEnter）。页面拿不到写白名单的接口，
+ * 这里也不要再尝试授权——给了就是「页面自己发通行证」，属于审核点名的情形。
  * @param {string[]} rawPaths 用户拖入的路径，目录与文件可混排
  * @returns {Promise<number>} 实际新增的文件数量（全部重复时为 0）
  */
@@ -19,9 +20,7 @@ export async function addPaths(rawPaths) {
     if (!p) continue
     try {
       if (api.isDir(p)) {
-        // preload 不热更新：新版本是 listMedia，旧版本只有 listAudio
-        const lister = api.listMedia || api.listAudio
-        if (typeof lister === 'function') collected.push(...lister(p, { recursive: true }))
+        if (typeof api.listMedia === 'function') collected.push(...api.listMedia(p, { recursive: true }))
       } else {
         collected.push(p)
       }
@@ -54,9 +53,7 @@ export async function addPaths(rawPaths) {
 export function pickFiles(opts = {}) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   if (!api) return []
-  const audio = Array.isArray(api.AUDIO_EXTS) ? api.AUDIO_EXTS : []
-  const video = Array.isArray(api.VIDEO_EXTS) ? api.VIDEO_EXTS : []
-  const media = [...audio, ...video]
+  const media = [...AUDIO_EXTS, ...VIDEO_EXTS]
   const filters =
     opts.filters ||
     [

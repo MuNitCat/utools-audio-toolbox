@@ -1,5 +1,5 @@
 {
-  "name": "audio-batch-preload",
+  "name": "utools-audio-toolbox-preload",
   "version": "1.0.0",
   "private": true,
   "type": "commonjs"

@@ -1,0 +1,40 @@
+{
+  "audio": [
+    "mp3",
+    "m4a",
+    "m4b",
+    "aac",
+    "flac",
+    "wav",
+    "wave",
+    "ogg",
+    "oga",
+    "opus",
+    "alac",
+    "aiff",
+    "aif",
+    "ape",
+    "wma",
+    "mka",
+    "caf",
+    "amr"
+  ],
+  "video": [
+    "mp4",
+    "m4v",
+    "mkv",
+    "mov",
+    "avi",
+    "webm",
+    "flv",
+    "wmv",
+    "ts",
+    "m2ts",
+    "mpg",
+    "mpeg",
+    "3gp",
+    "ogv",
+    "vob",
+    "rmvb"
+  ]
+}

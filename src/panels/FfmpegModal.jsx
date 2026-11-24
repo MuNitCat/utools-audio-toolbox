@@ -107,11 +107,13 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     }
   ]
 
-  const applyScan = (info) => {
+  const applyScan = async (info) => {
     if (!api) return
     const hostCurrent = !(info && info.ffmpeg && info.ffmpeg.source === 'system')
     if (typeof api.scanBinaries === 'function') {
-      setItems(withHost(api.scanBinaries(), hostCurrent))
+      // 新 preload 的 scan 是异步的（内部并发 -version），旧 preload 返回数组也能 await
+      const list = await api.scanBinaries(true)
+      setItems(withHost(Array.isArray(list) ? list : [], hostCurrent))
       setStale(false)
     } else {
       // preload 太旧，没有扫描接口：列出已知项并明确提示
@@ -120,14 +122,14 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     }
   }
 
-  const refresh = () => {
+  const refresh = async () => {
     if (!api) return
     setBusy(true)
     try {
       // getBinaries 只回「当前在用的」，候选列表靠 scanBinaries 单独扫
-      const info = api.getBinaries()
+      const info = typeof api.getBinariesAsync === 'function' ? await api.getBinariesAsync() : api.getBinaries()
       setSummary(info)
-      applyScan(info)
+      await applyScan(info)
     } catch (err) {
       setHint({ kind: 'error', text: (err && err.message) || '检测失败' })
     } finally {
@@ -152,12 +154,17 @@ export default function FfmpegModal({ open, onClose, onChange }) {
 
   if (!open) return null
 
-  const pick = (item) => {
+  const pick = async (item) => {
     if (!api || item.current) return
     try {
-      const next = api.setFfmpegPreference(item.source === 'host' ? { mode: 'host' } : { mode: 'custom', path: item.path })
+      const next = await api.setFfmpegPreference(item.source === 'host' ? { mode: 'host' } : { mode: 'custom', path: item.path })
+      // 新 preload 会先校验路径/版本，失败返回 {ok:false,error}，不能当成切换成功
+      if (next && next.ok === false) {
+        setHint({ kind: 'error', text: next.error || '切换失败' })
+        return
+      }
       setSummary(next)
-      applyScan(next)
+      await applyScan(next)
       if (onChange) onChange(next)
       setHint(null)
     } catch (err) {
@@ -165,7 +172,7 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     }
   }
 
-  const addManual = () => {
+  const addManual = async () => {
     if (!api) return
     const value = manual.trim()
     if (!value) return
@@ -173,27 +180,31 @@ export default function FfmpegModal({ open, onClose, onChange }) {
       setHint({ kind: 'error', text: 'preload 未更新，暂不支持添加路径；请完全退出插件后重新进入。' })
       return
     }
+    setBusy(true)
     try {
-      const res = api.addFfmpegPath(value)
+      const res = await api.addFfmpegPath(value)
       if (!res || !res.ok) {
         setHint({ kind: 'error', text: (res && res.error) || '路径不可用' })
         return
       }
       setItems(withHost(res.items, false))
       setStale(false)
-      setSummary(api.getBinaries())
+      setSummary(await (api.getBinariesAsync ? api.getBinariesAsync() : api.getBinaries()))
       setManual('')
       setHint({ kind: 'ok', text: `已添加 ${res.version}：${res.path}` })
     } catch (err) {
       setHint({ kind: 'error', text: (err && err.message) || '添加失败' })
+    } finally {
+      setBusy(false)
     }
   }
 
-  const removeManual = (item) => {
+  const removeManual = async (item) => {
     if (!api || typeof api.removeFfmpegPath !== 'function') return
     try {
-      const info = api.getBinaries()
-      setItems(withHost(api.removeFfmpegPath(item.path), info.ffmpeg && info.ffmpeg.source === 'host'))
+      const items = await api.removeFfmpegPath(item.path)
+      const info = await (api.getBinariesAsync ? api.getBinariesAsync() : api.getBinaries())
+      setItems(withHost(items, info.ffmpeg && info.ffmpeg.source === 'host'))
       setSummary(info)
       setStale(false)
       setHint({ kind: 'ok', text: '已从列表移除' })
@@ -223,6 +234,13 @@ export default function FfmpegModal({ open, onClose, onChange }) {
 
             {summary && summary.customInvalid && (
               <div className="ff-hint danger">自定义路径已失效，当前暂用自动探测的结果。</div>
+            )}
+
+            {api && !api.caps && (
+              <div className="ff-hint danger">
+                当前 preload 仍是旧版本（{api.version ? `v${api.version}` : '未知'}），路径白名单与参数校验未生效。
+                请完全退出插件（不是收起窗口）后重新进入。
+              </div>
             )}
 
             {stale && (

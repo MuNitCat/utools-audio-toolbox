@@ -50,6 +50,10 @@ export default function MainPage() {
     if (!api || typeof api.getBinaries !== 'function') return
     try {
       setBinInfo(api.getBinaries())
+      // 新 preload 的探测是异步的：先给同步快照，再补一次准确结果
+      if (typeof api.getBinariesAsync === 'function') {
+        api.getBinariesAsync().then(setBinInfo).catch(() => {})
+      }
     } catch (_) {}
   }, [])
 

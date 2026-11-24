@@ -7,7 +7,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
-const { execFileSync } = require('node:child_process')
+const { execFile } = require('node:child_process')
 const { capture } = require('./ffmpeg')
 const binaries = require('./binaries')
 
@@ -253,20 +253,37 @@ function mapProbeJson(json) {
   return out
 }
 
-/** 用系统 ffprobe 拿结构化信息；任何异常都返回 null，由调用方回退到 stderr 解析 */
+/**
+ * 用系统 ffprobe 拿结构化信息。异步执行（审核建议：不要用 execFileSync 阻塞主进程）。
+ * 任何异常都返回 null，由调用方回退到 stderr 解析。
+ * @param {string} bin ffprobe 路径
+ * @param {string} file 媒体文件
+ * @returns {Promise<object|null>} 归一化后的探测结果
+ */
 function probeViaFFprobe(bin, file) {
-  try {
-    const text = execFileSync(
+  return new Promise((resolve) => {
+    execFile(
       bin,
       ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
-      { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }
+      { timeout: 30000, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+      (err, stdout) => {
+        if (err) {
+          resolve(null)
+          return
+        }
+        try {
+          const json = JSON.parse(String(stdout || ''))
+          if (!json || (!json.format && !(json.streams || []).length)) {
+            resolve(null)
+            return
+          }
+          resolve(mapProbeJson(json))
+        } catch (_) {
+          resolve(null)
+        }
+      }
     )
-    const json = JSON.parse(text)
-    if (!json || (!json.format && !(json.streams || []).length)) return null
-    return mapProbeJson(json)
-  } catch (_) {
-    return null
-  }
+  })
 }
 
 function safeStat(file) {
@@ -301,7 +318,7 @@ async function probe(file) {
   // 1) 系统装了 ffprobe 就用结构化输出：更快、字段可靠、不用抠正则
   const ffprobe = binaries.ffprobePath()
   if (ffprobe) {
-    const parsed = probeViaFFprobe(ffprobe, file)
+    const parsed = await probeViaFFprobe(ffprobe, file)
     if (parsed) {
       const audioOk = parsed.audioStreams > 0 || parsed.codec !== ''
       return {

@@ -13,12 +13,14 @@
 import * as A from './args.js'
 import { FORMAT_KEYS, CONTAINERS } from './args.js'
 import { parseTimeInput, clockTag } from './format.js'
+import { numberedOutput, resolveOutput, stripExt } from './paths.js'
 
 /** preload 桥接对象；SSR / 单测环境没有 window，返回 null 由调用方处理 */
 const svc = () => (typeof window !== 'undefined' ? window.audioServices : null)
 
 /**
- * 解析输出路径（冲突时由 preload 负责加 (1)(2)）。
+ * 解析输出路径。规则在 src/core/paths.js（原 preload/lib/paths.js，审核要求下沉），
+ * 重名冲突的 `(1)(2)` 后缀仍要通过 preload 的 exists 判断。
  * @param {string} input 输入文件绝对路径
  * @param {object} params 当前参数（读 outputDir / suffix / overwrite）
  * @param {string} ext 输出扩展名，不带点
@@ -27,9 +29,8 @@ const svc = () => (typeof window !== 'undefined' ? window.audioServices : null)
  * @throws {Error} preload 未就绪时抛出
  */
 function out(input, params, ext, opts = {}) {
-  const api = svc()
-  if (!api) throw new Error('audioServices 未就绪')
-  return api.resolveOutput(input, {
+  if (!svc()) throw new Error('audioServices 未就绪')
+  return resolveOutput(input, {
     dir: params.outputDir || '',
     suffix: params.suffix || '',
     ext,
@@ -202,7 +203,8 @@ export const FEATURES = [
     tool: 'audio_convert',
     fields: [
       formatField('m4a'),
-      bitrateField,
+      // 默认「原样」：不指定码率就沿用源文件自己的码率，避免把 320k 的源默认压成 192k
+      bitrateAutoField,
       qualityField,
       { key: 'sampleRate', label: '采样率', type: 'select', default: '', options: [
         { value: '', label: '原样', title: '保持原采样率' },
@@ -313,11 +315,11 @@ export const FEATURES = [
 
         // 逐条导出：每条音轨一个文件，命名 原名{suffix}_1 / _2 …
         if (mode === 'all' && tracks > 1) {
-          const base = api.stripExt(info.name || input.split('/').pop())
+          const base = stripExt(info.name || input.split('/').pop())
           const stem = `${base}${params.suffix || ''}`
           const ops = []
           for (let track = 0; track < tracks; track += 1) {
-            const output = api.resolveOutput(input, {
+            const output = resolveOutput(input, {
               dir: params.outputDir || '',
               name: `${stem}_${track + 1}`,
               ext,
@@ -475,12 +477,12 @@ export const FEATURES = [
           const v = params[key]
           if (v !== undefined && v !== null && String(v).trim() !== '') tags[key] = String(v).trim()
         }
-        if (params.titleFromName) tags.title = api.stripExt(info.name || input.split('/').pop())
+        if (params.titleFromName) tags.title = stripExt(info.name || input.split('/').pop())
 
         const ops = []
         // 导出原封面放在前面，让任务结束时 task.output 仍指向音频文件
         if (params.extractCover && info.hasCover) {
-          const coverOut = api.resolveOutput(input, {
+          const coverOut = resolveOutput(input, {
             dir: params.outputDir || '',
             suffix: params.suffix ? `${params.suffix}_cover` : '_cover',
             ext: params.coverFormat || 'jpg',
@@ -591,7 +593,7 @@ export const FEATURES = [
         if (params.mode === 'duration' || params.mode === 'count') {
           const segs = planEven(duration, params)
           segs.forEach((seg, idx) => {
-            const output = api.numberedOutput(input, idx + 1, {
+            const output = numberedOutput(input, idx + 1, {
               dir: params.outputDir || '',
               ext: A.outputExtOf(format),
               timeRange: `${clockTag(seg.start)}_${clockTag(seg.end)}`
@@ -880,6 +882,7 @@ export const FEATURES = [
         const output = out(input, params, A.outputExtOf(format), { suffix: params.suffix || '_norm' })
         const common = {
           input,
+          output,
           targetLufs: Number(params.targetLufs) || -18,
           truePeak: Number(params.truePeak),
           lra: Number(params.lra),

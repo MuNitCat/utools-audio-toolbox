@@ -98,6 +98,19 @@ pnpm build         # 产物到 dist/，并做四项校验
 
 MCP 调用会自动拉起插件（即使窗口没打开），长任务通过 `ctx.sendProgress` 上报进度。返回结构是 `{ results[], succeeded, failed, total }`，单个文件失败不会中断整批，只在对应项里带 `error`。
 
+## 安全边界
+
+插件会调用 ffmpeg、读写本地文件，因此把「渲染层能指挥 preload 做什么」收紧到了下面几条（对应插件市场审核意见）：
+
+- **路径白名单（会话级）**：只有用户**亲手选择**（打开文件对话框 / 选目录）、**拖入**、或**从 uTools 文件关联进入**的路径会被登记；其余路径一律拒绝。删文件、移动文件、读图片、递归列目录、探测文件都要先过这道校验。
+- **删除与覆盖只认本次产出**：只有「本次会话里 ffmpeg 真正写出的文件」和插件临时目录里的文件可以删；目标已存在时，即便打开「覆盖同名文件」也不会覆盖非本次产出的文件。
+- **ffmpeg 参数白名单**：`run` / `runCapture` 收到的参数数组会逐个 token 校验——只认已登记的 flag 与取值范围，输入必须是已授权文件、输出必须落在已授权目录，`http(s)://`、`pipe:`、`movie=` 滤镜、`-f lavfi`、未知 flag 等一律拒绝。
+- **ffmpeg 可执行文件校验**：切换自定义 ffmpeg 时要求文件名是 `ffmpeg` / `ffprobe`，且 `-version` 输出确实以 `ffmpeg version N` 开头、主版本 ≥ 4；失败直接拒绝，不会写进配置。
+- **外链白名单**：设置页里的「下载」只放行 `https` 且主机为 evermeet.cx / gyan.dev / ffmpeg.org 的链接。
+- **配置分两处存**：输出模式、后缀、响度目标、主题等跨机偏好存在 uTools 同步库；`ffmpegPath`、`ffmpegExtras`、自定义输出目录这类本机绝对路径存在插件本地文件，不随账号同步。
+
+对 AI（MCP）同样生效：`audio_*` 工具只能处理**用户已经在插件界面里添加过的文件**，输出目录限「源文件同级 / 下载目录 / 桌面 / 用户选过的目录」；传其它路径会返回明确的「未授权」错误，而不是静默失败。
+
 ## 实现要点
 
 - **ffmpeg 有两条后端，优先用系统装的那个**。`preload/lib/binaries.js` 按「设置里的自定义路径 → `$PATH` → 常见安装目录」找 `ffmpeg`，要求主版本 ≥ 4；找到就用 `child_process.spawn` 直接跑（自带 `-progress pipe:1` 解析进度）。找不到才退回 `utools.runFFmpeg()`（宿主内置，macOS 上是 7.1）。
@@ -118,20 +131,23 @@ MCP 调用会自动拉起插件（即使窗口没打开），长任务通过 `ct
 ## 目录
 
 ```
-plugin.json                 uTools 清单（6 个字段 + 13 个 tools schema）
+plugin.json                 uTools 清单（main / logo / preload / features；tools 由构建生成）
 preload/
   index.js                  装配 window.audioServices
   lib/probe.js              stderr 解析元信息
   lib/ffmpeg.js             进程表 / 环形缓冲 / quit→kill
-  lib/fsx.js  paths.js      文件与路径（含不覆盖的命名策略）
+  lib/fsx.js                文件操作（读 / 写 / 列目录，全部先过白名单）
+  lib/exts.js               扩展名常量，数据来自 shared/exts.json
   lib/config.js             设置持久化
 src/
   core/args.js              所有 ffmpeg 参数的唯一真相
   core/features.js          功能定义：字段 + build()，GUI 与 MCP 共用
+  core/paths.js             输出命名 / 重名检测（业务规则，前端持有，唯一实现）
   core/queue.js             2 路并行队列、op 权重进度、取消重试
   core/mcp.js  register.js  13 个 MCP 工具与注册
   core/store.js  ingest.js  状态与文件载入
   panels/ components/        UI
+shared/exts.json            音频 / 视频扩展名（preload 与前端读同一份）
 scripts/build-plugin.mjs    构建校验
 doc/                        修复日志（索引见 doc/README.md）
 ```
@@ -149,10 +165,26 @@ doc/                        修复日志（索引见 doc/README.md）
 
 ## 构建校验
 
+除了「工具名与实现一一对应」「产物不含 ffmpeg 二进制」「总体积 < 3MB」，还会检查 `preload/index.js` 已接入 `lib/guard`、参数白名单模块确实被打进产物——防止出现「前端改了、preload 忘了拷」的版本错配。
+
+
 `pnpm build` 会断言：
 
-- `plugin.json` 的工具名与 `src/core/tool-names.js` 完全一致，且每个工具都有合法 `inputSchema`
+- `src/core/tool-schemas.js` 的 `TOOL_DEFS` 与 `src/core/tool-names.js` 完全一致，每个工具都有 `description` 和 object 类型的 `inputSchema`，`required` 里的字段必须已声明；`dist/plugin.json` 的 `tools` 就是由它生成的（根 `plugin.json` 里写了 `tools` 会直接构建失败）
 - 产物里没有 `development` 字段
 - 产物里没有 ffmpeg / ffprobe 二进制
-- 产物总大小 < 3MB（当前 0.25MB）
+- 产物总大小 < 3MB（当前 0.38MB）
 - `index.html` 用相对路径引用资源
+
+`pnpm check` 另有一组不依赖测试框架的断言脚本（失败即非零退出，构建前先跑一遍）：
+
+- `scripts/check/guard.test.mjs`——路径白名单：未授权的读 / 写 / 删 / 改全部拒绝，只授权直接父目录
+- `scripts/check/api-surface.test.mjs`——preload 对外接口面：页面拿不到写白名单的接口（`grantPaths` / `grantDir` 这类名字以及任何 `grant*` / `allow*` 都不允许存在），导出键集合必须与脚本里的 `EXPECTED_KEYS` 逐字一致。新增 preload 接口要显式补进这个快照
+- `scripts/check/args.test.mjs` + `features-args.test.mjs`——ffmpeg 参数白名单：17 个功能的真实参数全部过一遍，注入型参数必须被拒
+- `scripts/check/paths.test.mjs`——输出命名规则的 golden 断言（17 例），锁死用户最终看到的文件名
+- `scripts/check/binaries.test.mjs`——ffmpeg 探测、文件名与 `-version` 横幅校验
+- `scripts/check/ffmpeg-smoke.mjs`——真实 ffmpeg 端到端冒烟（本机没有 ffmpeg 时跳过）
+
+> ⚠️ **新增 ffmpeg flag 或 `-af` 滤镜时，必须同时登记进 `preload/lib/argswhitelist.js`**（flag 白名单 + 取值规则 + 滤镜名），然后跑 `node scripts/check/features-args.test.mjs`。白名单默认拒绝未登记项，漏登记不会在构建期报错，只会让功能在运行期直接失败——所以这是硬要求，不是建议。
+
+提交前可安装官方自检 skill，让 AI 按审核标准先自查一遍：npx skills add uTools-Labs/utools-plugin-selfcheck-skill

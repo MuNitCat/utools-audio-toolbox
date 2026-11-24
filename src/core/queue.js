@@ -7,6 +7,7 @@ import { getFeature } from './features.js'
 import * as A from './args.js'
 import { parseSilence, parseLoudnorm, planSegments, errorTail, clockTag } from './format.js'
 import { getState, setState, toast } from './store.js'
+import { numberedOutput } from './paths.js'
 
 const svc = () => window.audioServices
 
@@ -263,7 +264,7 @@ function buildSplitOps(task, text) {
 
   const format = p.format || 'flac'
   return segs.map((seg, idx) => {
-    const output = api.numberedOutput(task.input, idx + 1, {
+    const output = numberedOutput(task.input, idx + 1, {
       dir: p.outputDir || '',
       ext: A.outputExtOf(format),
       timeRange: `${clockTag(seg.start)}_${clockTag(seg.end)}`
@@ -316,9 +317,18 @@ async function runTask(task) {
   const fail = (err) => {
     const cur = getState().tasks.find((t) => t.id === task.id)
     const canceled = Boolean((err && err.canceled) || (cur && cur.canceled))
-    // 只删本任务自己产出的文件，别碰源文件
-    if (currentOp && currentOp.output) api.removeFile(currentOp.output)
-    for (const out of outputs) api.removeFile(out)
+    // 只删本任务自己产出的文件；preload 白名单会拒绝其它路径，失败只记日志不影响收尾
+    const drop = (file) => {
+      if (!file) return
+      try {
+        const res = api.removeFile(file)
+        if (res && res.ok === false) console.warn('[audio-batch] 清理未完成：', res.message)
+      } catch (cleanupErr) {
+        console.warn('[audio-batch] 清理异常：', cleanupErr && cleanupErr.message)
+      }
+    }
+    drop(currentOp && currentOp.output)
+    for (const out of outputs) drop(out)
     const patch = canceled
       ? { status: 'canceled', message: '已取消', progress: 0 }
       : { status: 'failed', error: errorTail(err) || String((err && err.message) || err), message: '失败' }
