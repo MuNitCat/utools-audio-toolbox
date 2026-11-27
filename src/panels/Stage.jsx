@@ -97,19 +97,17 @@ export default function Stage() {
           // 视频的总码率含画面，列表里给音轨码率；容器码率放进悬停提示
           const isVideo = Boolean(info.hasVideo)
           const bitrate = isVideo ? info.streamBitrate || info.bitrate : info.bitrate
+          // 列表里只留时长与码率，采样率等细节挪进悬停提示，避免窄面板挤压文件名
           const sub = info.ok
-            ? [
-                formatClock(info.duration, false),
-                bitrate ? `${isVideo ? '音频 ' : ''}${bitrate}kbps` : '',
-                info.sampleRate ? `${info.sampleRate}Hz` : ''
-              ]
-                .filter(Boolean)
-                .join(' · ')
+            ? [formatClock(info.duration, false), bitrate ? `${bitrate}kbps` : ''].filter(Boolean).join(' · ')
             : f.error || '读取中…'
+          // 悬停提示带上完整元信息：前面的 sub 保证被截断时也能看全
           const subTitle = info.ok
             ? [
+                sub,
                 isVideo ? `视频容器总码率 ${info.bitrate || '?'}kbps` : '',
                 info.codec ? `编码 ${info.codec}` : '',
+                info.sampleRate ? `${info.sampleRate}Hz` : '',
                 info.channels ? `${info.channels} 声道` : '',
                 info.bitsPerSample ? `${info.bitsPerSample}bit` : ''
               ]

@@ -121,6 +121,19 @@ for (const mode of ['first', 'all', 'mix']) {
   }
 }
 
+// 音轨处理：只有「确定单音轨」时才禁用后两项，未知/多轨/混合都不能锁
+const trackField = extract.fields.find((f) => f.key === 'trackMode')
+const lockedModes = (files) =>
+  trackField.options
+    .filter((o) => trackField.optionDisabled(o, {}, { files }))
+    .map((o) => o.value)
+    .join(',')
+ok('extract 单音轨锁死逐条/混合', lockedModes([{ info: { ok: true, audioStreams: 1 } }]) === 'all,mix')
+ok('extract 多音轨不锁', lockedModes([{ info: { ok: true, audioStreams: 2 } }]) === '')
+ok('extract 单双轨混装不锁', lockedModes([{ info: { ok: true, audioStreams: 1 } }, { info: { ok: true, audioStreams: 3 } }]) === '')
+ok('extract 无文件不锁', lockedModes([]) === '')
+ok('extract 音轨数未知不锁', lockedModes([{ info: { ok: true } }]) === '')
+
 fs.rmSync(root, { recursive: true, force: true })
 
 console.log(`\n通过 ${pass} 项`)

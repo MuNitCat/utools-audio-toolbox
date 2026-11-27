@@ -162,7 +162,23 @@ function trackHint(_params, ctx) {
   const min = Math.min(...counts)
   const max = Math.max(...counts)
   if (min !== max) return `音轨数量不一致：${min} ~ ${max} 条`
+  if (min === 1) return '检测到 1 条音轨，只能导出这一条'
   return `检测到 ${min} 条音轨`
+}
+
+/**
+ * 已载入文件是否「确定只有一条音轨」。
+ *
+ * 只有全部探测成功且 audioStreams 都是 1 才算确定：多轨文件混进来时不能锁，
+ * 旧 preload 没有 audioStreams 字段（未知）也不能锁，否则会误伤真的有多轨的输入。
+ * @param {{files?: object[]}} [ctx] 已载入文件（带 probe 的 info）
+ * @returns {boolean} true 表示「逐条导出 / 混合一条」没有意义
+ */
+function singleTrackOnly(ctx) {
+  const counts = ((ctx && ctx.files) || [])
+    .map((f) => (f && f.info && f.info.ok ? Number(f.info.audioStreams) : NaN))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  return counts.length > 0 && counts.every((n) => n === 1)
 }
 
 /**
@@ -265,9 +281,21 @@ export const FEATURES = [
         default: 'first',
         options: [
           { value: 'first', label: '仅第一条', title: '只导出第一条音轨' },
-          { value: 'all', label: '逐条导出', title: '每条音轨各导出一个文件，命名 原名_1/2…' },
-          { value: 'mix', label: '混合一条', title: '把所有音轨混成一条（需要重编码）' }
+          {
+            value: 'all',
+            label: '逐条导出',
+            title: '每条音轨各导出一个文件，命名 原名_1/2…',
+            disabledTitle: '已载入的视频都只有 1 条音轨'
+          },
+          {
+            value: 'mix',
+            label: '混合一条',
+            title: '把所有音轨混成一条（需要重编码）',
+            disabledTitle: '已载入的视频都只有 1 条音轨'
+          }
         ],
+        // 只有一个音轨时后两项没有意义：禁用掉，值也会被 Params 自动拨回「仅第一条」
+        optionDisabled: (option, _params, ctx) => singleTrackOnly(ctx) && option.value !== 'first',
         hint: trackHint
       },
       {

@@ -549,6 +549,15 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--accent);
 }
 
+/* 禁用项（如只有一条音轨时的「逐条导出 / 混合一条」）：位置保留，只降对比度 */
+.sel-option.disabled,
+.sel-option.disabled:hover {
+  color: var(--text-3);
+  background: transparent;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .sel-option svg {
   flex: none;
 }
@@ -584,6 +593,21 @@ input[type='number']::-webkit-inner-spin-button {
   border-color: var(--accent-line);
   background: var(--accent-soft);
   color: var(--text);
+}
+
+/* 禁用项（如只有一条音轨时的「逐条导出 / 混合一条」）：占位不变，只降对比度 */
+.segment button:disabled,
+.option-card:disabled {
+  color: var(--text-3);
+  background: var(--bg-soft);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.segment button:disabled:hover,
+.option-card:disabled:hover {
+  border-color: var(--border);
+  color: var(--text-3);
 }
 
 /* 选项卡片网格 */
@@ -848,8 +872,9 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .file-item .name {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* 名字保底宽度：面板变窄时先让右侧元信息截断，而不是把文件名挤成 0 */
+  min-width: 120px;
   font-size: 12.5px;
   white-space: nowrap;
   overflow: hidden;
@@ -857,10 +882,14 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .file-item .sub {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .file-item .remove {

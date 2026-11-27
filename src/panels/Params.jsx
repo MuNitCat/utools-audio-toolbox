@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import Select from '../components/Select.jsx'
 import Tip from '../components/Tip.jsx'
 import { useStore } from '../core/store.js'
@@ -48,8 +49,10 @@ function Control({ field, value, onChange }) {
             <button
               key={String(o.value)}
               className={String(value ?? '') === String(o.value) ? 'active' : ''}
+              disabled={Boolean(o.disabled)}
+              // 禁用项说明为什么点不动（例如只有一条音轨）
+              title={o.disabled ? o.disabledTitle || o.title || o.label : o.label}
               onClick={() => onChange(field.key, o.value)}
-              title={o.label}
             >
               {o.label}
             </button>
@@ -64,6 +67,7 @@ function Control({ field, value, onChange }) {
             <button
               key={String(o.value)}
               className={`option-card${String(value ?? '') === String(o.value) ? ' active' : ''}`}
+              disabled={Boolean(o.disabled)}
               onClick={() => onChange(field.key, o.value)}
               // 有自绘气泡时不再挂原生 title，避免两套提示同时冒出来
               title={o.tip ? '' : o.title || o.label}
@@ -208,19 +212,74 @@ function Control({ field, value, onChange }) {
 }
 
 /**
+ * 把字段声明里的 `optionDisabled(option, params, ctx)` 摊平成 `option.disabled`。
+ * 判断逻辑留在功能定义里，控件层只认布尔值，不必知道为什么禁用。
+ * @param {object} field 字段定义
+ * @param {object} params 当前参数
+ * @param {object} ctx hint / optionDisabled 的上下文（含 files）
+ * @returns {object} 选项已带 disabled 的字段（无 optionDisabled 时原样返回）
+ */
+function resolveField(field, params, ctx) {
+  if (typeof field.optionDisabled !== 'function' || field.type !== 'select') return field
+  return {
+    ...field,
+    options: (field.options || []).map((o) => ({ ...o, disabled: Boolean(field.optionDisabled(o, params, ctx)) }))
+  }
+}
+
+/**
+ * 当前值落在被禁用选项上时的兜底值：优先字段默认值（若仍可用），其次第一个可用项。
+ * @param {object} field 已 resolveField 过的字段
+ * @returns {any} 可用的选项值；全部被禁用时返回 undefined
+ */
+function fallbackValue(field) {
+  const opts = field.options || []
+  const preferred = opts.find((o) => String(o.value) === String(field.default ?? ''))
+  if (preferred && !preferred.disabled) return preferred.value
+  const first = opts.find((o) => !o.disabled)
+  return first ? first.value : undefined
+}
+
+/**
  * 参数面板：完全由功能定义驱动，不写死在组件里。
  * @param {{feature: object, params: object, onChange: (key: string, value: any) => void, files?: object[]}} props
- *   files 会透传给 hint 函数（ctx.files），用于「按已载入文件算文案」的提示
+ *   files 会透传给 hint / optionDisabled（ctx.files），用于「按已载入文件算文案」的提示
  * @returns {JSX.Element|null} 没有功能时返回 null
  */
 export default function Params({ feature, params, onChange, files = [] }) {
   useStore((s) => s.featureId)
   const artists = useStore((s) => s.artistHistory)
-  /** hint 函数拿到的上下文：需要按已载入文件算文案时用（例如音轨数量） */
+  const probing = useStore((s) => s.probing)
+  /** hint / optionDisabled 拿到的上下文：需要按已载入文件算文案时用（例如音轨数量） */
   const ctx = { files }
+
+  // 选项级禁用在这里一次性算好，下面渲染与自动回退都用同一份结果。
+  // 还在探测时不判：文件是逐个出结果的，中途的「都是单音轨」只是临时状态，
+  // 提前锁死会把用户选好的「逐条导出」误拨回「仅第一条」。
+  const fields = ((feature && feature.fields) || []).map((f) =>
+    probing > 0 ? f : resolveField(f, params, ctx)
+  )
+
+  // 当前值被禁用（例如只剩 1 条音轨还停在「混合一条」）时自动拨回可用值，
+  // 否则界面会停在一个既点不动、又会被 build 当成有效值的状态
+  const fallback = fields
+    .filter((f) => f.type === 'select')
+    .map((f) => ({ field: f, value: fallbackValue(f) }))
+    .find(({ field, value }) => {
+      const hit = (field.options || []).find((o) => String(o.value) === String(params[field.key] ?? ''))
+      return Boolean(hit && hit.disabled) && value !== undefined
+    })
+  const fallbackKey = fallback ? `${fallback.field.key}=${String(fallback.value)}` : ''
+
+  useEffect(() => {
+    if (fallbackKey) onChange(fallback.field.key, fallback.value)
+    // fallbackKey 变化才需要重新拨值；fallback 对象每次渲染都是新的，不能进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fallbackKey])
+
   if (!feature) return null
 
-  const visible = feature.fields.filter((f) => (typeof f.showIf === 'function' ? f.showIf(params) : true))
+  const visible = fields.filter((f) => (typeof f.showIf === 'function' ? f.showIf(params) : true))
   if (!visible.length) return <div className="empty">这个功能没有可调参数</div>
 
   return (

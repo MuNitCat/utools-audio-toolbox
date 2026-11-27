@@ -32,7 +32,7 @@ const Tick = () => (
  * 因此 options 里写 number 就得到 number。
  * @param {object} props
  * @param {string|number} props.value 当前值
- * @param {{value: string|number, label: string, title?: string}[]} props.options 选项
+ * @param {{value: string|number, label: string, title?: string, disabled?: boolean}[]} props.options 选项
  * @param {(value: any) => void} props.onChange 选中回调
  * @param {string} [props.placeholder] 没有匹配项时的占位文案
  * @param {boolean} [props.disabled] 禁用态
@@ -58,6 +58,22 @@ export default function Select({
   const selectedIndex = options.findIndex((o) => String(o.value) === String(value ?? ''))
   const selected = selectedIndex >= 0 ? options[selectedIndex] : null
 
+  /**
+   * 从 from 开始单向找第一个可用项（跳过 disabled），到边界为止。
+   * @param {number} from 起始下标
+   * @param {number} delta 步进方向（1 向下 / -1 向上）
+   * @returns {number} 可停下高亮的项下标；全部禁用时返回 from 本身
+   */
+  const nextEnabled = (from, delta) => {
+    let i = from
+    for (let step = 0; step < options.length; step += 1) {
+      if (i >= 0 && i < options.length && !options[i].disabled) return i
+      i += delta
+      if (i < 0 || i >= options.length) break
+    }
+    return from
+  }
+
   const place = () => {
     const el = triggerRef.current
     if (!el || typeof window === 'undefined') return
@@ -80,7 +96,8 @@ export default function Select({
 
   const commit = (index) => {
     const opt = options[index]
-    if (!opt) return
+    // 禁用项点了不生效、也不关弹层，避免误以为选中了
+    if (!opt || opt.disabled) return
     if (onChange) onChange(opt.value)
     close(true)
   }
@@ -88,7 +105,7 @@ export default function Select({
   useEffect(() => {
     if (!open) return undefined
     place()
-    setActive(selectedIndex >= 0 ? selectedIndex : 0)
+    setActive(nextEnabled(selectedIndex >= 0 ? selectedIndex : 0, 1))
 
     const onDown = (e) => {
       if (menuRef.current && menuRef.current.contains(e.target)) return
@@ -125,9 +142,15 @@ export default function Select({
 
   const moveTo = (delta) => {
     if (!options.length) return
+    const len = options.length
     setActive((i) => {
-      if (i < 0) return 0
-      return (i + delta + options.length) % options.length
+      // 循环找下一个可用项（跳过 disabled），转一整圈都没有就停在原地
+      const start = i < 0 ? (delta > 0 ? -1 : 0) : i
+      for (let step = 1; step <= len; step += 1) {
+        const idx = (((start + delta * step) % len) + len) % len
+        if (!options[idx].disabled) return idx
+      }
+      return i
     })
   }
 
@@ -148,10 +171,10 @@ export default function Select({
       moveTo(-1)
     } else if (e.key === 'Home') {
       e.preventDefault()
-      setActive(0)
+      setActive(nextEnabled(0, 1))
     } else if (e.key === 'End') {
       e.preventDefault()
-      setActive(options.length - 1)
+      setActive(nextEnabled(options.length - 1, -1))
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       commit(active)
@@ -194,9 +217,14 @@ export default function Select({
                   key={`${String(o.value)}-${i}`}
                   role="option"
                   aria-selected={i === selectedIndex}
-                  className={`sel-option${i === active ? ' active' : ''}${i === selectedIndex ? ' current' : ''}`}
-                  title={o.title || o.label}
-                  onMouseEnter={() => setActive(i)}
+                  aria-disabled={Boolean(o.disabled)}
+                  className={`sel-option${i === active ? ' active' : ''}${i === selectedIndex ? ' current' : ''}${
+                    o.disabled ? ' disabled' : ''
+                  }`}
+                  title={o.disabled ? o.disabledTitle || o.title || o.label : o.title || o.label}
+                  onMouseEnter={() => {
+                    if (!o.disabled) setActive(i)
+                  }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => commit(i)}
                 >

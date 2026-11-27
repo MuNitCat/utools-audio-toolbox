@@ -33,7 +33,9 @@ MCP 调用会在插件未打开时静默拉起插件，只等注册完成。放�
 
 - 参数渲染是配置驱动的：`panels/Params.jsx` 的 `kindOf()` 决定分段控件 / 卡片网格 / 下拉；强制样式加 `ui: 'segment' | 'grid'`
 - `field.hint` 可以是函数，**签名固定 `(params, ctx)`**（`ctx.files` 是已载入文件，带 probe 的 info）；`switch` 字段同样支持 `hint`
-- 下拉一律用 `components/Select.jsx`，禁止原生 `<select>`
+- `field.optionDisabled(option, params, ctx)` 可选项级禁用（`select` 专属）：`Params.jsx` 把结果摊平成 `option.disabled`，三个控件（segment / 卡片网格 / 下拉）都认；禁用文案放 `option.disabledTitle`。当前值落在被禁用项上时，Params 会自动拨回 `field.default`（不可用则第一个可用项）——**判定逻辑写在功能定义里，控件层只认布尔值**
+- 用到「按已载入文件算状态」的禁用要判 `probing`：探测是逐个出结果的，中途的「都是单音轨」只是临时状态（见 `extract` 的 `singleTrackOnly`）
+- 下拉一律用 `components/Select.jsx`，禁止原生 `<select>`；它的 `options[].disabled` 会跳过键盘 ↑↓/Home/End 高亮，`commit` 也拒绝禁用项
 
 ## 队列与并发
 
