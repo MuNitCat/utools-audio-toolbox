@@ -819,10 +819,9 @@ export const FEATURES = [
 
       let args
       if (useCopy) {
-        const listFile = api.makeTempText(
-          inputs.map((f) => `file '${String(f).replace(/'/g, "'\\''")}'`).join('\n'),
-          'txt'
-        )
+        // concat 列表由 preload 从已授权路径拼装（makeConcatList 逐条过白名单），
+        // 渲染层不再有「任意文本写临时目录」的接口
+        const listFile = api.makeConcatList(inputs)
         args = A.mergeCopy({ listFile, output, format, threadCount: params.threadCount })
       } else {
         args = A.mergeReencode({

@@ -253,10 +253,42 @@ function buildSpec(ctx) {
   }
 }
 
+/** concat 列表条目里 file '...' 的匹配格式（与 fsx.makeConcatList 的产出一致） */
+const CONCAT_FILE_RE = /^file '(.*)'$/
+
+/**
+ * 解析 concat 列表文件并逐条校验其中列出的媒体路径。
+ * 逐条直接拒绝（不剔除），任何一条未授权都让整份参数不通过。
+ * @param {string} listFile 列表文件绝对路径（已在临时目录内）
+ * @param {{assertRead: Function, readText: Function}} ctx 白名单能力
+ * @returns {string|null} 失败原因；全部通过返回 null
+ */
+function checkConcatEntries(listFile, ctx) {
+  const content = ctx.readText(listFile)
+  if (!content) return 'concat 列表文件不可读或为空'
+
+  const lines = content.split('\n')
+  let entries = 0
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const match = CONCAT_FILE_RE.exec(trimmed)
+    if (!match) return `concat 列表含不支持的条目：${trimmed.slice(0, 60)}`
+    entries += 1
+    // 单引号转义还原：'\'' 是路径里一个字面单引号
+    const media = match[1].replace(/'\\''/g, "'")
+    const res = ctx.assertRead(media)
+    if (!res || !res.ok) return `concat 列表含未授权的输入：${media}`
+  }
+  if (!entries) return 'concat 列表没有任何 file 条目'
+  if (entries > 200) return `concat 列表超过 200 条上限`
+  return null
+}
+
 /**
  * 校验 run 的完整参数数组。
  * @param {string[]} args ffmpeg 参数
- * @param {{assertRead: Function, assertWriteTarget: Function, isTemp: Function}} ctx 白名单能力
+ * @param {{assertRead: Function, assertWriteTarget: Function, isTemp: Function, readText: Function}} ctx 白名单能力
  * @returns {{ok: true, output: string|null, inputs: string[]}|{ok: false, error: string}}
  */
 function validateRunArgs(args, ctx) {
@@ -299,7 +331,9 @@ function validateRunArgs(args, ctx) {
     positionals.push(tok)
   }
 
-  // -f concat 必须紧跟 -safe 0 -i <临时 txt>，防「拿任意 txt 当输入清单」
+  // -f concat 必须紧跟 -safe 0 -i <临时 txt>，防「拿任意 txt 当输入清单」；
+  // 并逐条解析列表里的 file 条目，各自过 assertReadFile——列表文件在临时目录
+  // 只说明「它自己可读」，不说明其中列的每个媒体文件都经过了授权。
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] !== '-f' || args[i + 1] !== 'concat') continue
     const seq = args.slice(i + 2, i + 6)
@@ -307,6 +341,8 @@ function validateRunArgs(args, ctx) {
     if (!okSeq) return bad('-f concat 必须紧跟 -safe 0 -i <列表文件>')
     const list = seq[3]
     if (!ctx.isTemp(list) || !/\.txt$/i.test(list)) return bad('concat 列表文件必须是插件临时目录里的 .txt')
+    const reason = checkConcatEntries(list, ctx)
+    if (reason) return bad(reason)
   }
 
   if (positionals.length !== 1) return bad('必须且只能有一个输出参数')

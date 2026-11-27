@@ -63,6 +63,32 @@ pnpm build         # 产物到 dist/，并做四项校验
 
 > ⚠️ 端口固定 **5180**（`vite.config.js` 里 `strictPort: true`，被占用会直接启动失败而不是自动换端口）。真要换端口，**两处都要改**：`vite.config.js` 的 `server.port` 和 `plugin.json` 的 `development.main`，漏一个就是白屏。
 
+## 构建校验
+
+除了「工具名与实现一一对应」「产物不含 ffmpeg 二进制」「总体积 < 3MB」，还会检查 `preload/index.js` 已接入 `lib/guard`、参数白名单模块确实被打进产物——防止出现「前端改了、preload 忘了拷」的版本错配。
+
+
+`pnpm build` 会断言：
+
+- `src/core/tool-schemas.js` 的 `TOOL_DEFS` 与 `src/core/tool-names.js` 完全一致，每个工具都有 `description` 和 object 类型的 `inputSchema`，`required` 里的字段必须已声明；`dist/plugin.json` 的 `tools` 就是由它生成的（根 `plugin.json` 里写了 `tools` 会直接构建失败）
+- 产物里没有 `development` 字段
+- 产物里没有 ffmpeg / ffprobe 二进制
+- 产物总大小 < 3MB（当前 0.38MB）
+- `index.html` 用相对路径引用资源
+
+`pnpm check` 另有一组不依赖测试框架的断言脚本（失败即非零退出，构建前先跑一遍）：
+
+- `scripts/check/guard.test.mjs`——路径白名单：未授权的读 / 写 / 删 / 改全部拒绝，只授权直接父目录
+- `scripts/check/api-surface.test.mjs`——preload 对外接口面：页面拿不到写白名单的接口（`grantPaths` / `grantDir` 这类名字以及任何 `grant*` / `allow*` 都不允许存在），导出键集合必须与脚本里的 `EXPECTED_KEYS` 逐字一致。新增 preload 接口要显式补进这个快照
+- `scripts/check/args.test.mjs` + `features-args.test.mjs`——ffmpeg 参数白名单：17 个功能的真实参数全部过一遍，注入型参数必须被拒
+- `scripts/check/paths.test.mjs`——输出命名规则的 golden 断言（17 例），锁死用户最终看到的文件名
+- `scripts/check/binaries.test.mjs`——ffmpeg 探测、文件名与 `-version` 横幅校验
+- `scripts/check/ffmpeg-smoke.mjs`——真实 ffmpeg 端到端冒烟（本机没有 ffmpeg 时跳过）
+
+> ⚠️ **新增 ffmpeg flag 或 `-af` 滤镜时，必须同时登记进 `preload/lib/argswhitelist.js`**（flag 白名单 + 取值规则 + 滤镜名），然后跑 `node scripts/check/features-args.test.mjs`。白名单默认拒绝未登记项，漏登记不会在构建期报错，只会让功能在运行期直接失败——所以这是硬要求，不是建议。
+
+提交前可安装官方自检 skill（本仓库已装在 `.agents/skills/utools-plugin-selfcheck/`），让 AI 按审核标准先自查一遍；独立安装命令：`npx skills add uTools-Labs/utools-plugin-selfcheck-skill`
+
 ## 用法
 
 - **拖入**：把文件或整个文件夹拖到插件窗口，或拖到 uTools 图标；文件夹会递归展开（音频与视频都会收进来，视频只在「视频提取音频」里有意义）
@@ -162,29 +188,3 @@ doc/                        修复日志（索引见 doc/README.md）
 - `loudnorm` 内部会把音频升到 192kHz，插件已强制拉回 48kHz。
 - 降噪用 `afftdn`（纯滤镜）；`arnndn` 需要外挂模型文件，宿主不提供，因此没有采用。
 - 没有自动更新器，升级靠重新打包安装。
-
-## 构建校验
-
-除了「工具名与实现一一对应」「产物不含 ffmpeg 二进制」「总体积 < 3MB」，还会检查 `preload/index.js` 已接入 `lib/guard`、参数白名单模块确实被打进产物——防止出现「前端改了、preload 忘了拷」的版本错配。
-
-
-`pnpm build` 会断言：
-
-- `src/core/tool-schemas.js` 的 `TOOL_DEFS` 与 `src/core/tool-names.js` 完全一致，每个工具都有 `description` 和 object 类型的 `inputSchema`，`required` 里的字段必须已声明；`dist/plugin.json` 的 `tools` 就是由它生成的（根 `plugin.json` 里写了 `tools` 会直接构建失败）
-- 产物里没有 `development` 字段
-- 产物里没有 ffmpeg / ffprobe 二进制
-- 产物总大小 < 3MB（当前 0.38MB）
-- `index.html` 用相对路径引用资源
-
-`pnpm check` 另有一组不依赖测试框架的断言脚本（失败即非零退出，构建前先跑一遍）：
-
-- `scripts/check/guard.test.mjs`——路径白名单：未授权的读 / 写 / 删 / 改全部拒绝，只授权直接父目录
-- `scripts/check/api-surface.test.mjs`——preload 对外接口面：页面拿不到写白名单的接口（`grantPaths` / `grantDir` 这类名字以及任何 `grant*` / `allow*` 都不允许存在），导出键集合必须与脚本里的 `EXPECTED_KEYS` 逐字一致。新增 preload 接口要显式补进这个快照
-- `scripts/check/args.test.mjs` + `features-args.test.mjs`——ffmpeg 参数白名单：17 个功能的真实参数全部过一遍，注入型参数必须被拒
-- `scripts/check/paths.test.mjs`——输出命名规则的 golden 断言（17 例），锁死用户最终看到的文件名
-- `scripts/check/binaries.test.mjs`——ffmpeg 探测、文件名与 `-version` 横幅校验
-- `scripts/check/ffmpeg-smoke.mjs`——真实 ffmpeg 端到端冒烟（本机没有 ffmpeg 时跳过）
-
-> ⚠️ **新增 ffmpeg flag 或 `-af` 滤镜时，必须同时登记进 `preload/lib/argswhitelist.js`**（flag 白名单 + 取值规则 + 滤镜名），然后跑 `node scripts/check/features-args.test.mjs`。白名单默认拒绝未登记项，漏登记不会在构建期报错，只会让功能在运行期直接失败——所以这是硬要求，不是建议。
-
-提交前可安装官方自检 skill，让 AI 按审核标准先自查一遍：npx skills add uTools-Labs/utools-plugin-selfcheck-skill

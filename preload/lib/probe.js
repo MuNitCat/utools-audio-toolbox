@@ -11,6 +11,9 @@ const { execFile } = require('node:child_process')
 const { capture } = require('./ffmpeg')
 const binaries = require('./binaries')
 
+/** `ffmpeg -i` 回退路径的超时：本地文件 15s 足够，超时按「探测失败」处理而不是永久占着并发槽 */
+const FALLBACK_TIMEOUT = 15000
+
 const TAG_SKIP = new Set([
   'encoder',
   'major_brand',
@@ -258,14 +261,15 @@ function mapProbeJson(json) {
  * 任何异常都返回 null，由调用方回退到 stderr 解析。
  * @param {string} bin ffprobe 路径
  * @param {string} file 媒体文件
+ * @param {{aborted: boolean}} [signal] 取消信号（AbortSignal 形状）；被中断时 execFile 会杀掉子进程
  * @returns {Promise<object|null>} 归一化后的探测结果
  */
-function probeViaFFprobe(bin, file) {
+function probeViaFFprobe(bin, file, signal) {
   return new Promise((resolve) => {
     execFile(
       bin,
       ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
-      { timeout: 30000, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+      { timeout: 30000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...(signal ? { signal } : {}) },
       (err, stdout) => {
         if (err) {
           resolve(null)
@@ -296,11 +300,32 @@ function safeStat(file) {
 }
 
 /**
- * 探测单个文件
- * @param {string} file 绝对路径
- * @returns {Promise<object>}
+ * @param {string} file 路径
+ * @returns {object} 与正常结果同形的「已取消」占位
  */
-async function probe(file) {
+function canceledResult(file) {
+  return {
+    path: file,
+    name: path.basename(file),
+    ext: path.extname(file).replace(/^\./, '').toLowerCase(),
+    size: 0,
+    mtime: 0,
+    ok: false,
+    error: '已取消',
+    canceled: true
+  }
+}
+
+/**
+ * 探测单个文件。
+ * @param {string} file 绝对路径
+ * @param {{signal?: object, procId?: string}} [opts] signal 用于中断 ffprobe 与标记取消；
+ *        procId 是回退路径在 ffmpeg.js 里的进程登记键（批量探测时带序号，避免同路径互相覆盖）
+ * @returns {Promise<object>} 探测结果；被取消时带 `canceled: true`
+ */
+async function probe(file, opts = {}) {
+  const signal = opts.signal || null
+  const procId = typeof opts.procId === 'string' && opts.procId ? opts.procId : `probe:${file}`
   const stat = safeStat(file)
   const base = {
     path: file,
@@ -314,11 +339,12 @@ async function probe(file) {
 
   const exists = fs.existsSync(file)
   if (!exists) return { ...base, error: '文件不存在' }
+  if (signal && signal.aborted) return canceledResult(file)
 
   // 1) 系统装了 ffprobe 就用结构化输出：更快、字段可靠、不用抠正则
   const ffprobe = binaries.ffprobePath()
   if (ffprobe) {
-    const parsed = await probeViaFFprobe(ffprobe, file)
+    const parsed = await probeViaFFprobe(ffprobe, file, signal)
     if (parsed) {
       const audioOk = parsed.audioStreams > 0 || parsed.codec !== ''
       return {
@@ -329,10 +355,14 @@ async function probe(file) {
         error: audioOk ? '' : '未能识别音频流（可能不是音频文件）'
       }
     }
+    // ffprobe 被取消后不要再 spawn 一个 ffmpeg —— 否则「取消」等于给系统再加一个进程
+    if (signal && signal.aborted) return canceledResult(file)
   }
 
   // 2) 退回解析 ffmpeg -i 的 stderr（宿主只有 ffmpeg、没有 ffprobe）
-  const res = await capture(`probe:${file}`, ['-hide_banner', '-nostdin', '-i', file])
+  const res = await capture(procId, ['-hide_banner', '-nostdin', '-i', file], { timeout: FALLBACK_TIMEOUT })
+  if (signal && signal.aborted) return canceledResult(file)
+
   const parsed = parseProbe(res.text)
 
   const audioOk = parsed.audioStreams > 0 || parsed.codec !== ''
@@ -345,20 +375,4 @@ async function probe(file) {
   }
 }
 
-/**
- * 顺序探测多个文件
- * @param {string[]} files
- * @param {(info:object, index:number, total:number)=>void} [onOne]
- */
-async function probeMany(files, onOne) {
-  const list = Array.isArray(files) ? files : []
-  const out = []
-  for (let i = 0; i < list.length; i += 1) {
-    const info = await probe(list[i])
-    out.push(info)
-    if (onOne) onOne(info, i, list.length)
-  }
-  return out
-}
-
-module.exports = { probe, probeMany, parseProbe }
+module.exports = { probe, parseProbe }

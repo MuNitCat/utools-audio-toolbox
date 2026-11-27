@@ -8,7 +8,7 @@
   },
   "features": [
     {
-      "code": "audio-batch",
+      "code": "utools-audio-toolbox",
       "description": "音频批量处理：格式转换、视频提取音频、码率压缩、裁剪、合并、变速增益、响度标准化、重采样、降噪、标签封面、静音切分、频谱图",
       "cmds": [
         "音频批量处理",

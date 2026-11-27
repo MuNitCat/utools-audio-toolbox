@@ -11,6 +11,7 @@ import { DEFAULT_HIDDEN_FEATURES, FEATURES, defaultParams, getFeature, isPinnedF
 import { resolveOutputDir } from '../core/output.js'
 import { tagsToParams } from '../core/tags.js'
 import { rememberArtist } from '../core/history.js'
+import { cancelProbing } from '../core/ingest.js'
 import { clearFinished, enqueue, setConcurrency } from '../core/queue.js'
 import { setState, toast, useStore } from '../core/store.js'
 import { formatShort } from '../core/format.js'
@@ -122,7 +123,7 @@ export default function MainPage() {
     const api = window.audioServices
     if (api) {
       try {
-        api.setConfig({
+        api.setConfigGuarded({
           outputMode: next.mode,
           outputDir: next.dir,
           overwrite: next.overwrite,
@@ -166,7 +167,7 @@ export default function MainPage() {
 
       const api = window.audioServices
       if (api) {
-        api.setConfig({
+        api.setConfigGuarded({
           outputMode: settings.mode,
           outputDir: settings.dir,
           overwrite: settings.overwrite,
@@ -184,11 +185,18 @@ export default function MainPage() {
         <img src="./logo.png" alt="" />
         <h1>音频批量处理</h1>
         <div className="right">
-          {probing > 0
-            ? `读取中 ${probing}`
-            : usable.length
-              ? `${usable.length} 个 · ${formatShort(totalDuration)}`
-              : '未添加文件'}
+          {probing > 0 ? (
+            <>
+              读取中 {probing}
+              <button className="link-btn" onClick={cancelProbing} aria-label="取消读取">
+                取消
+              </button>
+            </>
+          ) : usable.length ? (
+            `${usable.length} 个 · ${formatShort(totalDuration)}`
+          ) : (
+            '未添加文件'
+          )}
         </div>
       </div>
 

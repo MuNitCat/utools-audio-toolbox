@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/build-plugin.mjs",
     "preview": "vite preview",
-    "check": "node scripts/check/guard.test.mjs && node scripts/check/api-surface.test.mjs && node scripts/check/args.test.mjs && node scripts/check/features-args.test.mjs && node scripts/check/paths.test.mjs && node scripts/check/binaries.test.mjs && node scripts/check/ffmpeg-smoke.mjs"
+    "check": "node scripts/check/guard.test.mjs && node scripts/check/api-surface.test.mjs && node scripts/check/args.test.mjs && node scripts/check/features-args.test.mjs && node scripts/check/paths.test.mjs && node scripts/check/config.test.mjs && node scripts/check/pool.test.mjs && node scripts/check/binaries.test.mjs && node scripts/check/probe.test.mjs && node scripts/check/ffmpeg-smoke.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

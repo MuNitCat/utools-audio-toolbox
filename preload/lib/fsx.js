@@ -10,11 +10,11 @@ const path = require('node:path')
 const { MEDIA_EXTS } = require('./exts')
 const guard = require('./guard')
 
-const TEMP_PREFIX = 'audio-batch-'
+const TEMP_PREFIX = 'utools-audio-toolbox-'
 /** 封面/预览读图上限：12MB，超过直接当没有 */
 const MAX_IMAGE = 12 * 1024 * 1024
-/** concat 列表这类临时文本上限 */
-const MAX_TEMP_TEXT = 4 * 1024 * 1024
+/** concat 列表条目上限：超过说明调用方传参异常 */
+const MAX_CONCAT_ENTRIES = 200
 
 /** UI 可显示、可读成 data URL 的图片扩展名 */
 const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'])
@@ -104,31 +104,56 @@ function tempDir() {
       return dir
     }
   } catch (_) {}
-  const fallback = path.join(require('node:os').tmpdir(), 'audio-batch')
+  const fallback = path.join(require('node:os').tmpdir(), 'utools-audio-toolbox')
   ensureDir(fallback)
   return fallback
 }
 
 /**
- * 写一个临时文本文件（concat 列表等），只落在插件临时目录。
- * @param {string} content 文本内容
- * @param {string} [ext] 扩展名，只允许字母数字（默认 txt）
- * @returns {string} 生成的绝对路径
- * @throws {Error} 扩展名非法或内容过大时抛出
+ * 纯 stat 判断目录是否存在（不经 guard 白名单）。仅供 preload 内部
+ * 恢复启动白名单时校验配置残留值，不暴露到桥接层。
+ * @param {string} target 绝对路径
+ * @returns {boolean} 是真实存在的目录为 true
  */
-function makeTempText(content, ext = 'txt') {
-  const suffix = String(ext || 'txt')
-  if (!/^[a-z0-9]{1,8}$/.test(suffix)) throw new Error('临时文件扩展名非法')
-  const text = String(content == null ? '' : content)
-  if (text.length > MAX_TEMP_TEXT) throw new Error('临时文件内容过大')
-  const name = `${TEMP_PREFIX}${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${suffix}`
+function isRealDir(target) {
+  try {
+    return fs.statSync(target).isDirectory()
+  } catch (_) {
+    return false
+  }
+}
+
+/**
+ * 用已授权的输入路径拼一份 ffmpeg concat demuxer 列表，写进插件临时目录。
+ * 审核整改：取代旧的 makeTempText——渲染层不再有「任意文本写临时目录」的口子，
+ * 列表内容由 preload 从已授权路径生成，条目逐个过 assertReadFile。
+ * @param {string[]} paths 输入文件绝对路径（必须已由用户添加/拖入并授权）
+ * @returns {string} 列表文件绝对路径
+ * @throws {Error} 列表为空 / 超过条目上限 / 存在未授权路径时抛出
+ */
+function makeConcatList(paths) {
+  const list = Array.isArray(paths) ? paths : [paths]
+  if (!list.length) throw new Error('concat 列表为空')
+  if (list.length > MAX_CONCAT_ENTRIES) throw new Error(`concat 列表超过 ${MAX_CONCAT_ENTRIES} 条上限`)
+
+  // 逐条校验授权：任何一个没过 assertReadFile 的路径都让整份列表生成失败，
+  // 不静默剔除——否则调用方拿到的列表和实际能读的文件不一致。
+  const lines = []
+  for (const raw of list) {
+    const res = guard.assertReadFile(raw)
+    if (!res.ok) throw new Error(`concat 输入未授权：${res.message}`)
+    // ffmpeg concat demuxer 的单引号转义：路径里的 ' 写成 '\''（结束、转义、重开）
+    lines.push(`file '${res.path.replace(/'/g, "'\\''")}'`)
+  }
+
+  const name = `${TEMP_PREFIX}concat-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`
   const file = path.join(tempDir(), name)
-  fs.writeFileSync(file, text, 'utf8')
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8')
   return file
 }
 
 /**
- * 清理过期临时文件（默认 24h），只处理 audio-batch- 前缀。
+ * 清理过期临时文件（默认 24h），只处理 utools-audio-toolbox- 前缀。
  * @param {number} [maxAgeMs] 超过该时长的文件会被删
  * @returns {number} 删除数量
  */
@@ -161,7 +186,7 @@ function cleanupTemp(maxAgeMs = 24 * 3600 * 1000) {
 function listMedia(dir, opts = {}) {
   const allowed = guard.assertReadDir(dir)
   if (!allowed.ok) {
-    console.warn('[audio-batch] listMedia 被拒绝：', allowed.message)
+    console.warn('[utools-audio-toolbox] listMedia 被拒绝：', allowed.message)
     return []
   }
   const { recursive = true, exts = MEDIA_EXTS } = opts
@@ -259,7 +284,11 @@ module.exports = {
   exists,
   isDir,
   removeFile,
-  makeTempText,
+  makeConcatList,
+  /** concat 列表条目上限，校验层复用同一份数值 */
+  MAX_CONCAT_ENTRIES,
+  /** 内部使用：恢复启动白名单时校验配置里的 outputDir 是否真实存在 */
+  isRealDir,
   cleanupTemp,
   tempDir,
   listMedia,

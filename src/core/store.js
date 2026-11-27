@@ -164,7 +164,7 @@ export function setTheme(theme) {
   const api = typeof window !== 'undefined' ? window.audioServices : null
   if (api) {
     try {
-      api.setConfig({ theme: t })
+      api.setConfigGuarded({ theme: t })
     } catch (_) {}
   }
 }
@@ -193,6 +193,17 @@ export function addFiles(entries) {
  */
 export function removeFile(path) {
   setState({ files: state.files.filter((f) => f.path !== path) })
+}
+
+/**
+ * 批量移除（取消读取时清掉未完成的占位行）。合成一次 setState，避免 N 次渲染。
+ * @param {string[]} paths 要移除的绝对路径
+ * @returns {void} 无返回值
+ */
+export function removeFiles(paths) {
+  const drop = new Set(Array.isArray(paths) ? paths : [])
+  if (!drop.size) return
+  setState({ files: state.files.filter((f) => !drop.has(f.path)) })
 }
 
 /**

@@ -12,7 +12,8 @@
  * - 打开外链只允许 ffmpeg 下载相关站点
  */
 
-const { probe, probeMany } = require('./lib/probe')
+const { probe } = require('./lib/probe')
+const { runPool } = require('./lib/pool')
 const fpm = require('./lib/ffmpeg')
 const binaries = require('./lib/binaries')
 const previewer = require('./lib/previewer')
@@ -21,12 +22,12 @@ const exts = require('./lib/exts')
 const guard = require('./lib/guard')
 const { getConfig, setConfig } = require('./lib/config')
 
-const VERSION = '1.4.2'
+const VERSION = '1.5.0'
 
 /** 允许 openExternal 打开的站点（与设置页硬编码的三个下载地址对应） */
 const EXTERNAL_HOSTS = new Set(['evermeet.cx', 'www.evermeet.cx', 'gyan.dev', 'www.gyan.dev', 'ffmpeg.org', 'www.ffmpeg.org'])
-/** getPath 允许的约定名 */
-const PATH_NAMES = new Set(['home', 'desktop', 'documents', 'downloads', 'pictures', 'music', 'videos', 'userData', 'appData', 'temp', 'logs', 'exe'])
+/** getPath 允许的约定名：只有作为输出默认位置的两个目录，其余系统目录一律不提供 */
+const PATH_NAMES = new Set(['desktop', 'downloads'])
 
 function utoolsApi() {
   return (typeof window !== 'undefined' ? window.utools : globalThis.utools) || {}
@@ -103,7 +104,7 @@ function chooseFiles(opts = {}) {
 }
 
 /**
- * 选择目录。返回值登记为可写目录。
+ * 选择目录。返回值登记为**只写**目录（输出位置不需要读，避免顺带放开目录枚举）。
  * @param {string} [title] 对话框标题
  * @returns {string} 目录绝对路径；取消时空字符串
  */
@@ -115,7 +116,7 @@ function chooseDir(title = '选择输出目录') {
     properties: ['openDirectory', 'createDirectory']
   })
   const dir = Array.isArray(res) && res.length ? res[0] : ''
-  if (dir) guard.grantDir(dir)
+  if (dir) guard.grantWriteDir(dir)
   return dir
 }
 
@@ -147,7 +148,7 @@ function deliverEnter(list) {
   try {
     enterListener(list.slice())
   } catch (err) {
-    console.warn('[audio-batch] onEnterFiles 回调异常：', (err && err.message) || err)
+    console.warn('[utools-audio-toolbox] onEnterFiles 回调异常：', (err && err.message) || err)
   }
 }
 
@@ -196,7 +197,7 @@ function onEnterFiles(cb) {
 function openInFolder(target) {
   const res = guard.assertOpen(target)
   if (!res.ok) {
-    console.warn('[audio-batch] openInFolder 被拒绝：', res.message)
+    console.warn('[utools-audio-toolbox] openInFolder 被拒绝：', res.message)
     return false
   }
   const api = utoolsApi()
@@ -212,7 +213,7 @@ function openInFolder(target) {
 function openPath(target) {
   const res = guard.assertOpen(target)
   if (!res.ok || res.kind !== 'file') {
-    console.warn('[audio-batch] openPath 被拒绝：', (res && res.message) || '不是文件')
+    console.warn('[utools-audio-toolbox] openPath 被拒绝：', (res && res.message) || '不是文件')
     return false
   }
   const api = utoolsApi()
@@ -257,32 +258,140 @@ async function probeOne(file) {
   return probe(res.path)
 }
 
+/** 批量探测的 jobId 格式：只允许安全字符，不含路径信息 */
+const PROBE_JOB_RE = /^[A-Za-z0-9_-]{1,40}$/
+/** 每批文件数：软上限，只给取消与进度留检查点，不截断结果 */
+const PROBE_BATCH = 200
+/** 探测并发：ffprobe / ffmpeg -i 都是外部进程，3 路足够且不会把机械盘打满 */
+const PROBE_CONCURRENCY = 3
+
+/** 进行中的批量探测：jobId -> { canceled, controller, procs } */
+const probeJobs = new Map()
+
 /**
- * 批量探测。逐个容错：未授权的文件返回带 error 的结果，不影响其它文件。
- * @param {string[]} files 绝对路径数组
- * @param {(info: object, index: number, total: number) => void} [onOne] 每完成一个回调
- * @returns {Promise<object[]>} 与入参一一对应的探测结果
+ * @param {string} file 路径
+ * @returns {object} 取消占位（与正常结果同形，渲染层可据此移除未完成行）
  */
-async function probeManyGuarded(files, onOne) {
+function canceledInfo(file) {
+  const p = String(file || '')
+  return { ok: false, path: p, name: p.split(/[\\/]/).pop() || '', error: '已取消', canceled: true }
+}
+
+/**
+ * 取消一批探测。已完成的保留在调用方数组里，未开始的补取消占位，
+ * 正在跑的尽量中断（ffprobe 走 AbortSignal，ffmpeg 回退路径定点 kill）。
+ * @param {string} jobId 渲染层调用 probeMany 时传入的 jobId
+ * @returns {boolean} 命中了进行中的任务为 true
+ */
+function cancelProbe(jobId) {
+  const id = String(jobId || '')
+  if (!PROBE_JOB_RE.test(id)) return false
+  const job = probeJobs.get(id)
+  if (!job) return false
+  job.canceled = true
+  try {
+    job.controller.abort()
+  } catch (_) {}
+  // 回退路径的 ffmpeg 不在 AbortSignal 管辖内，逐个按进程 id 终止
+  for (const procId of job.procs) fpm.cancel(procId)
+  return true
+}
+
+/**
+ * 批量探测。逐项容错：未授权的文件返回带 denied 的结果，单文件失败不影响其它文件。
+ *
+ * 并发上限 3、按 200 一批滚动执行；`onOne` 对每个入参**恰好调用一次**（含取消占位），
+ * 否则渲染层的「读取中 N」计数会永久挂住。
+ * @param {string[]} files 绝对路径数组
+ * @param {((info: object, index: number, total: number) => void)|object} [onOne] 每完成一个回调；
+ *        传对象时视为 options（兼容 probeMany(files, { jobId })）
+ * @param {{jobId?: string}} [options] jobId 用于 cancelProbe，缺省自动生成
+ * @returns {Promise<object[]>} 与入参同序等长的探测结果
+ */
+async function probeManyGuarded(files, onOne, options) {
   const list = Array.isArray(files) ? files : []
-  const out = []
-  for (const file of list) {
+  let cb = onOne
+  let opts = options || {}
+  if (cb && typeof cb !== 'function') {
+    opts = cb
+    cb = null
+  }
+
+  const asked = String((opts && opts.jobId) || '')
+  const jobId = PROBE_JOB_RE.test(asked)
+    ? asked
+    : `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+
+  const controller = new AbortController()
+  const job = { canceled: false, controller, procs: new Set() }
+  probeJobs.set(jobId, job)
+
+  const out = new Array(list.length)
+
+  /**
+   * 单个文件的探测：授权 → 探测 → 容错。
+   * @param {string} file 路径
+   * @param {number} index 全局下标（用于生成互不冲突的进程 id）
+   * @returns {Promise<object>} 探测结果
+   */
+  const one = async (file, index) => {
     const res = guard.assertReadFile(file)
-    let info
     if (!res.ok) {
       const name = String(file || '').split(/[\\/]/).pop() || ''
-      info = { ok: false, path: String(file || ''), name, error: res.message, denied: true }
-    } else {
-      try {
-        info = await probe(res.path)
-      } catch (err) {
-        info = { ok: false, path: res.path, name: res.path.split(/[\\/]/).pop(), error: (err && err.message) || '探测失败' }
+      return { ok: false, path: String(file || ''), name, error: res.message, denied: true }
+    }
+    // 进程 id 带 jobId 与序号：同路径并发时 procs 表不会互相覆盖
+    const procId = `${jobId}:${index}`
+    job.procs.add(procId)
+    try {
+      return await probe(res.path, { signal: controller.signal, procId })
+    } catch (err) {
+      if (controller.signal.aborted) return canceledInfo(res.path)
+      return { ok: false, path: res.path, name: res.path.split(/[\\/]/).pop(), error: (err && err.message) || '探测失败' }
+    } finally {
+      job.procs.delete(procId)
+    }
+  }
+
+  /**
+   * @param {object} info 探测结果
+   * @param {number} index 全局下标
+   * @returns {void} 无返回值
+   */
+  const emit = (info, index) => {
+    if (typeof cb !== 'function') return
+    try {
+      cb(info, index, list.length)
+    } catch (_) {
+      // 页面回调出错不能中断整批，否则剩下的文件永远停在「读取中」
+    }
+  }
+
+  try {
+    for (let start = 0; start < list.length; start += PROBE_BATCH) {
+      if (job.canceled) break
+      const slice = list.slice(start, start + PROBE_BATCH)
+      const part = await runPool(slice, (file, i) => one(file, start + i), {
+        limit: PROBE_CONCURRENCY,
+        signal: controller.signal
+      })
+      for (let i = 0; i < part.length; i += 1) {
+        const info = part[i] || canceledInfo(list[start + i])
+        out[start + i] = info
+        emit(info, start + i)
       }
     }
-    out.push(info)
-    if (typeof onOne === 'function') onOne(info, out.length - 1, list.length)
+
+    // 取消后剩余未派发的位置：补占位并补回调，保证「同序等长 + onOne 调用 N 次」
+    for (let i = 0; i < out.length; i += 1) {
+      if (out[i]) continue
+      out[i] = canceledInfo(list[i])
+      emit(out[i], i)
+    }
+    return out
+  } finally {
+    probeJobs.delete(jobId)
   }
-  return out
 }
 
 /**
@@ -298,8 +407,12 @@ async function renderPreviewGuarded(opts = {}) {
     const n = Math.round(Number(v))
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback
   }
+  // token 会拼进进程 id（`preview:<token>`），必须夹到 cancelTask 认识的字符集，
+  // 否则含 / 之类的值时这个预览任务取消不掉
+  const token = /^[A-Za-z0-9_-]{1,40}$/.test(String(opts.token || '')) ? String(opts.token) : ''
   return previewer.render({
     ...opts,
+    token,
     input: res.path,
     kind: opts.kind === 'waveform' ? 'waveform' : 'spectrum',
     width: clamp(opts.width, 320, 4096, 1280),
@@ -331,15 +444,18 @@ function copyText(text) {
 }
 
 /**
- * 取系统目录。名字必须来自白名单枚举，并把目录登记为可写。
- * @param {string} name home / desktop / downloads 等
- * @returns {string} 绝对路径；不可用时空字符串
+ * 取系统目录。只接受 desktop / downloads 两个输出默认位置的名字，并登记为**只写**；
+ * 其他系统目录（home / documents / userData / appData 等）一律返回空字符串，
+ * 不返回路径也不授权——白名单只认用户选择 / 拖入 / 文件关联，渲染层无法借此扩权。
+ * 只写不读：页面即便调了 getPath('desktop')，也列不出桌面里的文件（listMedia 会被拒）。
+ * @param {string} name desktop 或 downloads
+ * @returns {string} 绝对路径；名字不在白名单或不可用时返回空字符串
  */
 function getPath(name) {
   const key = String(name || '')
   if (!PATH_NAMES.has(key)) return ''
   const dir = safeGetPath(key)
-  if (dir) guard.grantDir(dir)
+  if (dir) guard.grantWriteDir(dir)
   return dir
 }
 
@@ -347,11 +463,13 @@ window.audioServices = {
   version: VERSION,
 
   /** 前端能力探测：旧 preload 没有这个字段，前端据此降级 */
-  caps: { guard: 1, asyncBinaries: 1, enterFiles: 1 },
+  caps: { guard: 1, asyncBinaries: 1, enterFiles: 1, probeCancel: 1 },
 
   // 探测
   probe: probeOne,
   probeMany: probeManyGuarded,
+  /** 取消一批进行中的批量探测（只认 jobId，不接受路径） */
+  cancelProbe,
 
   // 执行（参数白名单在 lib/ffmpeg.js 的 run/capture 入口统一校验）
   run: fpm.run,
@@ -373,7 +491,7 @@ window.audioServices = {
   isDir: fsx.isDir,
   removeFile: fsx.removeFile,
   renameFile: fsx.renameFile,
-  makeTempText: fsx.makeTempText,
+  makeConcatList: fsx.makeConcatList,
   cleanupTemp: fsx.cleanupTemp,
   tempDir: fsx.tempDir,
   listMedia: fsx.listMedia,
@@ -388,7 +506,8 @@ window.audioServices = {
 
   // 配置
   getConfig,
-  setConfig,
+  /** 桥接版 setConfig：outputDir 必须是本次会话已授权的目录（chooseDir 选过）才落地 */
+  setConfigGuarded,
 
   // 二进制（优先系统 ffmpeg，其次 uTools 内置）
   // getBinaries 保持同步（读缓存快照），旧前端不会因为改成 Promise 而崩
@@ -419,13 +538,40 @@ window.audioServices = {
   getDownloadsPath: () => safeGetPath('downloads')
 }
 
-// 启动时无条件授权：临时目录 + 下载/桌面（输出位置的三个默认来源）+ 配置里的自定义输出目录
+/**
+ * 桥接层的 setConfig：outputDir 只在可信时才写入。
+ * 审核整改：渲染层不能再靠 setConfig({outputDir:'/任意路径'}) 给下个会话发写白名单通行证。
+ * 可信 = 本次会话已由 chooseDir / showOpenDialog 授权（assertWriteDir 通过），
+ * 或与当前已存的值完全一致（页面把持久化配置原样回传，不构成新扩权）；
+ * 其余一律丢弃，不落地。空串表示「清掉自定义目录」，放行。
+ * @param {object} patch 配置增量
+ * @returns {object} 更新后的完整配置
+ */
+function setConfigGuarded(patch) {
+  const incoming = { ...(patch || {}) }
+  if (incoming.outputDir !== undefined) {
+    const dir = String(incoming.outputDir || '')
+    const trusted =
+      !dir ||
+      dir === (getConfig().outputDir || '') ||
+      guard.assertWriteDir(dir).ok
+    if (!trusted) delete incoming.outputDir
+  }
+  return setConfig(incoming)
+}
+
+// 启动时授权「输出默认位置」：临时目录 + 下载/桌面 + 配置里的自定义输出目录。
+// 一律只写（grantWriteDir）：这些位置只用来落产物，不需要也不允许反查目录内容。
 for (const dir of [fsx.tempDir(), safeGetPath('downloads'), safeGetPath('desktop')]) {
-  if (dir) guard.grantDir(dir)
+  if (dir) guard.grantWriteDir(dir)
 }
 try {
   const cfg = getConfig()
-  if (cfg && cfg.outputDir) guard.grantDir(cfg.outputDir)
+  // outputDir 的写入口已在 setConfigGuarded 收口：只有「本次会话已授权」或「与已存值一致」才落地。
+  // 这里再挡两类脏值：① 目录已失效（被删/移动）；② 老版本残留值 ——
+  // config 的 migrate() 不再搬 outputDir，v1 本机文件里的 outputDir 也会被丢弃，
+  // 所以走到这里的值只可能来自经过手势校验的写入。
+  if (cfg && cfg.outputDir && fsx.isRealDir(cfg.outputDir)) guard.grantWriteDir(cfg.outputDir)
 } catch (_) {}
 
 // 宿主 onPluginEnter 是单槽赋值，整个插件只在这里注册；页面通过 onEnterFiles 订阅。
@@ -433,4 +579,4 @@ try {
 const hostApi = utoolsApi()
 if (typeof hostApi.onPluginEnter === 'function') hostApi.onPluginEnter(handlePluginEnter)
 
-console.log(`[audio-batch] preload v${VERSION} ready`)
+console.log(`[utools-audio-toolbox] preload v${VERSION} ready`)

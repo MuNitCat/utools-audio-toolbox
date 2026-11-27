@@ -45,9 +45,9 @@ export function rememberArtist(raw) {
 
   setState({ artistHistory: next })
   const a = api()
-  if (a && typeof a.setConfig === 'function') {
+  if (a && typeof a.setConfigGuarded === 'function') {
     try {
-      a.setConfig({ artistHistory: next })
+      a.setConfigGuarded({ artistHistory: next })
     } catch (_) {}
   }
   return next

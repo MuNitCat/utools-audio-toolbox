@@ -13,13 +13,16 @@
 const { spawn } = require('node:child_process')
 const binaries = require('./binaries')
 const guard = require('./guard')
+const fsx = require('./fsx')
 const { validateRunArgs, validateCaptureArgs } = require('./argswhitelist')
 
 /** 参数白名单需要的能力集合（注入而不是直接依赖，方便单测） */
 const ARG_CTX = {
   assertRead: guard.assertReadFile,
   assertWriteTarget: guard.assertWriteTarget,
-  isTemp: guard.isTemp
+  isTemp: guard.isTemp,
+  // concat 列表逐条校验要读列表内容；fsx.readText 无权限门槛，仅用于临时目录内的文件
+  readText: fsx.readText
 }
 
 /**
@@ -236,15 +239,45 @@ async function run(id, args, opts = {}) {
 /**
  * 采集模式：把 stderr 全量收下来（静音检测 / loudnorm 分析需要读日志）。
  * 探测类命令以非零退出是常态，所以只在拿到空文本时才 reject。
+ * @param {string} id 进程登记键（取消/查询都用它）
+ * @param {string[]} args 已校验的参数
+ * @param {{timeout?: number}} [opts] timeout 毫秒；超时走既有 cancel（SIGTERM→SIGKILL / quit→kill）
  * @returns {Promise<{ok:boolean, text:string, error?:Error}>}
  */
-function capture(id, args) {
+function capture(id, args, opts = {}) {
   // 采集只允许 probe.js 的两种形态，避免绕开 run 的校验
   const chk = validateCaptureArgs(args, ARG_CTX)
   if (!chk.ok) return Promise.reject(argError(chk.error))
 
   const ring = createRing(500000)
   const bin = binaries.ffmpegPath()
+  const timeout = Number(opts.timeout) > 0 ? Number(opts.timeout) : 0
+
+  /**
+   * 超时守卫：到点先置标记，再复用既有 cancel 终止进程（不另写 kill，避免两套终止逻辑）。
+   * 返回的 stop 必须在 settle 时调用，否则定时器可能在进程结束后再 cancel 一次。
+   * @param {() => void} onTimeout 超时回调，用来把结果标成「探测超时」而不是退出码
+   * @returns {{start: () => void, stop: () => void}} 启动与清理
+   */
+  const timeoutGuard = (onTimeout) => {
+    let timer = null
+    return {
+      start() {
+        if (!timeout) return
+        timer = setTimeout(() => {
+          onTimeout()
+          try {
+            cancel(id)
+          } catch (_) {}
+        }, timeout)
+        if (typeof timer.unref === 'function') timer.unref()
+      },
+      stop() {
+        if (timer) clearTimeout(timer)
+        timer = null
+      }
+    }
+  }
 
   if (bin) {
     return new Promise((resolve, reject) => {
@@ -260,16 +293,25 @@ function capture(id, args) {
       child.stderr.on('data', (chunk) => ring.push(chunk))
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', (chunk) => ring.push(chunk))
+
+      let timedOut = false
+      const guard = timeoutGuard(() => {
+        timedOut = true
+      })
+      guard.start()
+
       child.on('error', (err) => {
+        guard.stop()
         procs.delete(id)
         err.text = ring.text()
         reject(err)
       })
       child.on('close', (code) => {
+        guard.stop()
         procs.delete(id)
         const text = ring.text()
         if (code === 0) resolve({ ok: true, text })
-        else resolve({ ok: false, text, error: new Error(`ffmpeg 退出码 ${code}`) })
+        else resolve({ ok: false, text, error: new Error(timedOut ? '探测超时' : `ffmpeg 退出码 ${code}`) })
       })
     })
   }
@@ -287,15 +329,24 @@ function capture(id, args) {
       return
     }
     procs.set(id, { kind: 'host', proc })
+
+    let timedOut = false
+    const guard = timeoutGuard(() => {
+      timedOut = true
+    })
+    guard.start()
+
     proc.then(
       () => {
+        guard.stop()
         procs.delete(id)
         resolve({ ok: true, text: ring.text() })
       },
       (err) => {
+        guard.stop()
         procs.delete(id)
         const text = [ring.text(), err && err.message].filter(Boolean).join('\n')
-        resolve({ ok: false, text, error: err })
+        resolve({ ok: false, text, error: timedOut ? new Error('探测超时') : err })
       }
     )
   })

@@ -34,7 +34,7 @@ async function render(opts = {}) {
   if (!input || !fs.existsSync(input)) throw new Error('文件不存在')
 
   const dir = fsx.tempDir()
-  const out = path.join(dir, `audio-batch-preview-${process.pid}-${Date.now()}.png`)
+  const out = path.join(dir, `utools-audio-toolbox-preview-${process.pid}-${Date.now()}.png`)
 
   const args = ['-hide_banner', '-nostdin', '-y']
   let from = 0
@@ -50,7 +50,9 @@ async function render(opts = {}) {
   args.push('-i', input, '-lavfi', filter, '-frames:v', '1', '-update', '1', out)
 
   try {
-    await run(`preview:${token || path.basename(out)}`, args)
+    // 进程 id 必须落在 cancelTask 的字符集 `^[a-zA-Z0-9:_-]{1,64}$` 内：
+    // token 由桥接层校验过，没有时用短随机串而不是文件名（文件名带空格/点会取消失效）
+    await run(`preview:${token || `p${Date.now().toString(36)}`}`, args)
     const dataUrl = `data:image/png;base64,${fs.readFileSync(out).toString('base64')}`
     return {
       dataUrl,

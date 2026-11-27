@@ -99,10 +99,22 @@ ok('grantDir 通过', grantedDir.ok)
 ok('目录内可写', guard.assertWriteTarget(path.join(work, 'inside.m4a'), { overwrite: true }).ok)
 ok('目录可列举', guard.assertReadDir(work).ok)
 
-// 9. 临时目录：audio-batch- 前缀可删，其它文件不可
+// 8b. 只写目录：能写、能探测重名，但**不可列举也不可读**
+// 审核意见：getPath('desktop') 曾把桌面同时登记为可读，页面能 listMedia 递归枚举整个桌面
+const outOnly = path.join(root, 'out-only')
+fs.mkdirSync(outOnly, { recursive: true })
+const outOnlyFile = path.join(outOnly, 'secret.wav')
+fs.writeFileSync(outOnlyFile, 'x')
+ok('grantWriteDir 通过', guard.grantWriteDir(outOnly).ok)
+ok('只写目录内可写', guard.assertWriteTarget(path.join(outOnly, 'new.m4a'), { overwrite: true }).ok)
+ok('只写目录可探测存在性（重名检测仍可用）', guard.assertProbe(outOnlyFile).ok)
+ok('只写目录不可列举', !guard.assertReadDir(outOnly).ok, JSON.stringify(guard.assertReadDir(outOnly)))
+ok('只写目录里的文件不可读', !guard.assertReadFile(outOnlyFile).ok, JSON.stringify(guard.assertReadFile(outOnlyFile)))
+
+// 9. 临时目录：utools-audio-toolbox- 前缀可删，其它文件不可
 const fsx = require('../../preload/lib/fsx.js')
 const tmpDir = fsx.tempDir()
-const tempPath = path.join(tmpDir, 'audio-batch-123.txt')
+const tempPath = path.join(tmpDir, 'utools-audio-toolbox-123.txt')
 fs.writeFileSync(tempPath, 'list')
 ok('临时目录前缀文件可删', guard.assertDelete(tempPath).ok, tempPath)
 const plainTemp = path.join(tmpDir, 'other-123.txt')

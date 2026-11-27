@@ -133,7 +133,7 @@ function insideKey(dirKey, targetKey) {
 }
 
 /**
- * 是否为插件临时目录里的文件（只看 audio-batch- 前缀）。
+ * 是否为插件临时目录里的文件（只看 utools-audio-toolbox- 前缀）。
  * @param {string} target 绝对路径
  * @returns {boolean}
  */
@@ -149,7 +149,7 @@ function isTemp(target) {
     tKey = fold(t)
   }
   if (!insideKey(tKey, n.key)) return false
-  return path.basename(n.path).startsWith('audio-batch-')
+  return path.basename(n.path).startsWith('utools-audio-toolbox-')
 }
 
 /**
@@ -188,7 +188,11 @@ function grantPaths(paths, opts = {}) {
 }
 
 /**
- * 登记一个可写目录（选择输出目录 / 系统下载、桌面目录 / 配置里的自定义目录）。
+ * 登记一个「读 + 写」目录。只用于**用户手势选中的目录**（拖入/选择框里挑的是文件夹）。
+ *
+ * ⚠️ 输出位置不要用这个，用下面的 grantWriteDir：输出目录只需要能写，
+ * 一旦同时进 readDirs，整个目录就变成可枚举（listMedia 能递归列出里面所有媒体文件），
+ * 等于渲染层凭一次 getPath 就给自己扩了读权限。
  * @param {string} dir 绝对路径
  * @returns {{ok: true, path: string}|{ok: false, code: string, message: string}}
  */
@@ -196,6 +200,20 @@ function grantDir(dir) {
   const n = norm(dir, { allowMissing: true })
   if (!n.ok) return n
   readDirs.set(n.key, { path: n.path, at: Date.now() })
+  writeDirs.set(n.key, { path: n.path, at: Date.now() })
+  return { ok: true, path: n.path }
+}
+
+/**
+ * 登记一个「只写」目录：系统桌面/下载、用户选择的输出目录、配置里的自定义输出目录。
+ * 只进 writeDirs 不进 readDirs —— 写授权不等于可读，`assertReadDir` 也不看 writeDirs，
+ * 所以页面即使调了 getPath('desktop')，也列不出桌面里有什么。
+ * @param {string} dir 绝对路径
+ * @returns {{ok: true, path: string}|{ok: false, code: string, message: string}}
+ */
+function grantWriteDir(dir) {
+  const n = norm(dir, { allowMissing: true })
+  if (!n.ok) return n
   writeDirs.set(n.key, { path: n.path, at: Date.now() })
   return { ok: true, path: n.path }
 }
@@ -229,13 +247,15 @@ function assertReadFile(target) {
 }
 
 /**
+ * 枚举目录里的文件需要「读」授权。**不认 writeDirs**：
+ * 输出位置只授权写，不允许页面反查目录内容（审核意见：getPath('desktop') 曾能列出整个桌面）。
  * @param {string} target 目录绝对路径
  * @returns {{ok: true, path: string}|{ok: false, code: string, message: string}}
  */
 function assertReadDir(target) {
   const n = norm(target)
   if (!n.ok) return n
-  if (readDirs.has(n.key) || writeDirs.has(n.key) || isTemp(n.path)) return n
+  if (readDirs.has(n.key) || isTemp(n.path)) return n
   return fail('EDIR_DENIED', `未授权的目录：${n.path}`)
 }
 
@@ -357,6 +377,7 @@ module.exports = {
   isTemp,
   grantPaths,
   grantDir,
+  grantWriteDir,
   noteProduced,
   assertReadFile,
   assertReadDir,

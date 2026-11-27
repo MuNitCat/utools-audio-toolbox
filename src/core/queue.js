@@ -322,9 +322,9 @@ async function runTask(task) {
       if (!file) return
       try {
         const res = api.removeFile(file)
-        if (res && res.ok === false) console.warn('[audio-batch] 清理未完成：', res.message)
+        if (res && res.ok === false) console.warn('[utools-audio-toolbox] 清理未完成：', res.message)
       } catch (cleanupErr) {
-        console.warn('[audio-batch] 清理异常：', cleanupErr && cleanupErr.message)
+        console.warn('[utools-audio-toolbox] 清理异常：', cleanupErr && cleanupErr.message)
       }
     }
     drop(currentOp && currentOp.output)

@@ -22,26 +22,16 @@ const mp4 = path.join(dir, 'v.mp4')
 const cover = path.join(dir, 'cover.jpg')
 for (const f of [flac, flac2, mp4, cover]) fs.writeFileSync(f, 'x')
 
-// features.js 只用到 exists（重名检测）和 makeTempText（merge 的 concat 列表）
+// features.js 只用到 exists（重名检测）和 makeConcatList（merge 的 concat 列表）
 global.window = {
   audioServices: {
     // 真实 preload 的 exists 会看磁盘；这里用 fs 保持同样的语义（否则同格式输出会漏掉 (1)）
-    exists: (file) => fs.existsSync(file),
-    makeTempText: (content) => {
-      const file = path.join(root, `audio-batch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.txt`)
-      fs.writeFileSync(file, content)
-      return file
-    }
+    exists: (file) => fs.existsSync(file)
   }
 }
-// 让 makeTempText 产出的文件被判定为「临时文件」
+// concat 列表用 preload 的真实现：逐条过 assertReadFile、写进真实临时目录
 const fsx = require('../../preload/lib/fsx.js')
-const realTemp = fsx.tempDir()
-global.window.audioServices.makeTempText = (content) => {
-  const file = path.join(realTemp, `audio-batch-features-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.txt`)
-  fs.writeFileSync(file, content)
-  return file
-}
+global.window.audioServices.makeConcatList = fsx.makeConcatList
 
 const { FEATURES, defaultParams } = await import('../../src/core/features.js')
 
@@ -50,7 +40,8 @@ guard.grantPaths([flac, flac2, mp4, cover])
 const ctx = {
   assertRead: guard.assertReadFile,
   assertWriteTarget: guard.assertWriteTarget,
-  isTemp: guard.isTemp
+  isTemp: guard.isTemp,
+  readText: fsx.readText
 }
 
 const info = {

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import MainPage from './pages/MainPage.jsx'
 import Toast from './components/Toast.jsx'
 import { addPaths } from './core/ingest.js'
-import { setState, setTheme } from './core/store.js'
+import { setState, setTheme, toast } from './core/store.js'
 import { loadArtistHistory } from './core/history.js'
 
 /**
@@ -53,6 +53,8 @@ export default function App() {
       try {
         api.cleanupTemp(24 * 3600 * 1000)
       } catch (_) {}
+      // 本机配置目录全不可写时配置只活在本次会话，明确告知而不是静默丢失
+      if (cfg._localDegraded) toast('本机配置目录不可写，本次设置仅在当前会话生效', 'error')
     }
 
     const offEnter = watchPluginEnter()

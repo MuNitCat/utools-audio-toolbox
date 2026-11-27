@@ -107,12 +107,18 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     }
   ]
 
-  const applyScan = async (info) => {
+  /**
+   * 刷新候选列表。
+   * @param {object} info summary（用于判断当前用的是不是宿主内置）
+   * @param {boolean} force 是否强制重扫；打开弹窗时传 false，只有「重新扫描」才 true
+   * @returns {Promise<void>} 无返回值
+   */
+  const applyScan = async (info, force = false) => {
     if (!api) return
     const hostCurrent = !(info && info.ffmpeg && info.ffmpeg.source === 'system')
     if (typeof api.scanBinaries === 'function') {
       // 新 preload 的 scan 是异步的（内部并发 -version），旧 preload 返回数组也能 await
-      const list = await api.scanBinaries(true)
+      const list = await api.scanBinaries(force)
       setItems(withHost(Array.isArray(list) ? list : [], hostCurrent))
       setStale(false)
     } else {
@@ -122,14 +128,19 @@ export default function FfmpegModal({ open, onClose, onChange }) {
     }
   }
 
-  const refresh = async () => {
+  /**
+   * 拉取当前结论并按需重扫。
+   * @param {boolean} force 是否强制重扫候选（用户点「重新扫描」才传 true）
+   * @returns {Promise<void>} 无返回值
+   */
+  const refresh = async (force = false) => {
     if (!api) return
     setBusy(true)
     try {
       // getBinaries 只回「当前在用的」，候选列表靠 scanBinaries 单独扫
       const info = typeof api.getBinariesAsync === 'function' ? await api.getBinariesAsync() : api.getBinaries()
       setSummary(info)
-      await applyScan(info)
+      await applyScan(info, force)
     } catch (err) {
       setHint({ kind: 'error', text: (err && err.message) || '检测失败' })
     } finally {
@@ -227,7 +238,7 @@ export default function FfmpegModal({ open, onClose, onChange }) {
           <div className="ff-section">
             <div className="ff-section-title">
               可用 FFmpeg（点一行切换）
-              <button className="link-btn" disabled={busy} onClick={refresh}>
+              <button className="link-btn" disabled={busy} onClick={() => refresh(true)}>
                 {busy ? '检测中…' : '重新扫描'}
               </button>
             </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { clearFiles, removeFile, useStore } from '../core/store.js'
-import { addPaths, pickFiles } from '../core/ingest.js'
+import { addPaths, cancelProbing, pickFiles } from '../core/ingest.js'
 import { formatBytes, formatClock, formatShort } from '../core/format.js'
 import Icon from '../components/Icon.jsx'
 
@@ -79,6 +79,11 @@ export default function Stage() {
           {probing > 0 ? ` · 读取中 ${probing}` : ''}
         </span>
         <span className="spacer" />
+        {probing > 0 ? (
+          <button className="link-btn" onClick={cancelProbing} aria-label="取消读取">
+            取消读取
+          </button>
+        ) : null}
         <button className="link-btn" onClick={onPick}>
           继续添加
         </button>

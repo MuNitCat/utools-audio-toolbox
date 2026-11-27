@@ -16,14 +16,14 @@ let registered = 0
 export function registerMcpTools() {
   const utools = typeof window !== 'undefined' ? window.utools : null
   if (!utools || typeof utools.registerTool !== 'function') {
-    console.warn('[audio-batch] 当前环境没有 utools.registerTool，跳过 MCP 注册')
+    console.warn('[utools-audio-toolbox] 当前环境没有 utools.registerTool，跳过 MCP 注册')
     return 0
   }
   try {
     registered = registerAllTools(utools)
-    console.log(`[audio-batch] 已注册 ${registered} 个 MCP 工具`)
+    console.log(`[utools-audio-toolbox] 已注册 ${registered} 个 MCP 工具`)
   } catch (err) {
-    console.error('[audio-batch] 注册 MCP 工具失败：', err)
+    console.error('[utools-audio-toolbox] 注册 MCP 工具失败：', err)
     registered = 0
   }
   return registered

@@ -41,7 +41,8 @@ guard.grantPaths([flac, mp4, cover, flac2])
 const ctx = {
   assertRead: guard.assertReadFile,
   assertWriteTarget: guard.assertWriteTarget,
-  isTemp: guard.isTemp
+  isTemp: guard.isTemp,
+  readText: fsx.readText
 }
 const out = (name) => path.join(inputDir, name)
 
@@ -64,8 +65,9 @@ function expectCapture(name, args) {
   ok(`capture: ${name}`, res.ok, res.error)
 }
 
-const listFile = path.join(fsx.tempDir(), `audio-batch-test-${process.pid}.txt`)
-fs.writeFileSync(listFile, `${flac}\n${flac2}\n`)
+const listFile = path.join(fsx.tempDir(), `utools-audio-toolbox-test-${process.pid}.txt`)
+// 列表内容用 makeConcatList 的产出格式（file '...'），条目是已授权的 flac/flac2
+fs.writeFileSync(listFile, `file '${flac.replace(/'/g, "'\\''")}'\nfile '${flac2.replace(/'/g, "'\\''")}'\n`)
 
 // ---------------- 正例：17 个功能里所有参数构造器 ----------------
 expectRun('convert m4a', A.convert({ input: flac, output: out('a.m4a'), format: 'm4a', bitrate: 192 }))
@@ -121,8 +123,28 @@ expectReject(
   '临时目录'
 )
 
+// 临时目录里的列表但含未授权条目：逐条校验必须拒绝
+const sneakyList = path.join(fsx.tempDir(), `utools-audio-toolbox-sneaky-${process.pid}.txt`)
+fs.writeFileSync(sneakyList, `file '${flac.replace(/'/g, "'\\''")}'\nfile '/etc/secret.flac'\n`)
+expectReject(
+  'concat 列表含未授权条目',
+  ['-i', flac, '-f', 'concat', '-safe', '0', '-i', sneakyList, '-c', 'copy', out('x.m4a')],
+  '未授权'
+)
+
+// 临时目录里的列表但条目格式不对（裸路径不是 file '...' 行）
+const oddList = path.join(fsx.tempDir(), `utools-audio-toolbox-odd-${process.pid}.txt`)
+fs.writeFileSync(oddList, `${flac}\n${flac2}\n`)
+expectReject(
+  'concat 列表条目格式非法',
+  ['-i', flac, '-f', 'concat', '-safe', '0', '-i', oddList, '-c', 'copy', out('x.m4a')],
+  '条目'
+)
+
 fs.rmSync(root, { recursive: true, force: true })
 fs.rmSync(listFile, { force: true })
+fs.rmSync(sneakyList, { force: true })
+fs.rmSync(oddList, { force: true })
 
 console.log(`\n通过 ${pass} 项`)
 if (fails.length) {
